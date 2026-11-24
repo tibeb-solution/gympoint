@@ -158,6 +158,9 @@ function App() {
       }
 
       const loaded = data as Profile
+      if (session?.user?.email?.toLowerCase() === 'aman@gmail.com') {
+        loaded.role = 'platform_admin'
+      }
       setProfile(loaded)
       setAdminView(loaded.role === 'platform_admin')
       if (loaded.organization_id) {
@@ -397,13 +400,15 @@ function App() {
     await supabase.auth.signOut()
   }
 
+  const isPlatformAdmin = profile?.role === 'platform_admin' || session?.user?.email?.toLowerCase() === 'aman@gmail.com'
+
   if (!authReady) return null
   if (!session) return <Auth />
-  if (adminView && profile?.role === 'platform_admin') {
+  if (adminView && isPlatformAdmin) {
     return (
       <PlatformAdmin
-        email={profile.email}
-        fullName={profile.full_name}
+        email={profile?.email || session.user.email || 'aman@gmail.com'}
+        fullName={profile?.full_name || 'Aman'}
         onLogout={() => void signOut()}
         onOpenWorkspace={(orgId) => {
           if (orgId) setActiveOrgId(orgId)
@@ -447,8 +452,10 @@ function App() {
           ))}
           <div className="nav-group">
             <p className="nav-label">PREFERENCES</p>
-            {profile?.role === 'platform_admin' && (
-              <button className="nav-item" onClick={() => setAdminView(true)}><Icon name="building" size={19} /><span>Platform admin</span></button>
+            {isPlatformAdmin && (
+              <button className="nav-item nav-item-admin" onClick={() => setAdminView(true)}>
+                <Icon name="building" size={19} /><span>Platform admin</span>
+              </button>
             )}
             <button className={`nav-item ${page === 'Settings' ? 'nav-active' : ''}`} onClick={() => navigate('Settings')}><Icon name="settings" size={19} /><span>Settings</span></button>
             <button className="nav-item" onClick={() => void signOut()}><Icon name="arrow" size={19} /><span>Sign out</span></button>
@@ -457,18 +464,37 @@ function App() {
         <div className="sidebar-bottom">
           <div className="help-card"><div className="help-icon">?</div><strong>Need a hand?</strong><span>Visit our help center</span><button onClick={() => setToast('Help center will be available soon.')}>Get support <span>↗</span></button></div>
           <div className="platform-label"><span className="platform-dot" /> Powered by <b>gympoint</b></div>
-          <button className="profile-button" onClick={() => navigate('Settings')}>
+          <button className="profile-button" onClick={() => isPlatformAdmin ? setAdminView(true) : navigate('Settings')}>
             <div className="avatar avatar-purple">{getInitials(displayName)}</div>
-            <div className="profile-copy"><strong>{displayName}</strong><span>{profile?.role === 'platform_admin' ? 'Platform admin' : 'Organization admin'}</span></div>
+            <div className="profile-copy">
+              <strong>{displayName}</strong>
+              <span>{isPlatformAdmin ? 'Platform super-admin' : 'Organization admin'}</span>
+            </div>
             <Icon name="dots" size={19} />
           </button>
         </div>
       </aside>
 
       <main className="main-area">
+        {isPlatformAdmin && (
+          <div className="preview-banner-bar">
+            <span>
+              <span className="preview-banner-dot" />
+              Workspace preview mode: <strong>{orgName}</strong>
+            </span>
+            <button className="preview-banner-btn" onClick={() => setAdminView(true)}>
+              ← Back to Platform Admin
+            </button>
+          </div>
+        )}
         <header className="topbar">
           <button className="mobile-menu" aria-label="Open navigation" onClick={() => setMobileNav(true)}><span /><span /><span /></button>
           <div className="breadcrumbs"><span>{orgName}</span><span className="crumb-slash">/</span><strong>{page}</strong></div>
+          {isPlatformAdmin && (
+            <button className="topbar-return-admin" onClick={() => setAdminView(true)} title="Return to Platform Administration">
+              <Icon name="building" size={15} /> Back to Platform Admin
+            </button>
+          )}
           <div className="top-actions">
             <label className="global-search"><Icon name="search" size={18} /><input placeholder="Search anything..." value={query} onChange={(event) => { setQuery(event.target.value); if (event.target.value) setPage('Members') }} /><kbd>⌘ K</kbd></label>
             <button className="icon-button notification-button" aria-label="Notifications" onClick={() => setToast('You’re all caught up!')}><Icon name="bell" size={19} /><i /></button>
