@@ -1,19 +1,26 @@
-# GymFlow
+# GymPoint
 
-A React + TypeScript gym-management UI prototype. All records are demo data stored in this browser's `localStorage`; there is no backend or Supabase connection. The sign-in and platform-admin screens are client-side demos, not secure authentication. Do not enter real member or health information.
+A React + TypeScript gym-management platform backed by Supabase (Auth, PostgreSQL, and Row Level Security).
 
 ## Run locally
 
-```sh
-npm install
-npm run dev
-```
+1. Copy `.env.example` to `.env.local` and fill in your Supabase project URL and anon/publishable key:
 
-Sign in to the local platform-admin demo with:
+   ```sh
+   VITE_SUPABASE_URL=https://your-project-id.supabase.co
+   VITE_SUPABASE_ANON_KEY=your-supabase-anon-key
+   ```
 
-- Email: `aman@gmai.com`
-- Password: `aman1234`
+2. Install dependencies and start the dev server:
 
-The admin portal can create company workspaces; these are saved to this browser only. Use **Preview gym workspace** to return to the gym dashboard. The organization screens are UI previews for the later backend phase.
+   ```sh
+   npm install
+   npm run dev
+   ```
 
-Build for production with `npm run build`.
+3. Build for production with `npm run build`.
+
+## Notes
+
+- Never put a Supabase `service_role` key in any `VITE_` environment variable.
+- User roles (`platform_admin`, `org_admin`, `manager`, `staff`) and organization isolation are enforced via Supabase Row Level Security in `public.profiles`.
