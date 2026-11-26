@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { createClient } from '@supabase/supabase-js'
 import { supabase } from './lib/supabase'
 
 type CompanyStatus = 'Active' | 'Trial' | 'Suspended'
@@ -129,23 +130,60 @@ export default function PlatformAdmin({
     const name = String(data.get('companyName') ?? '').trim()
     const adminName = String(data.get('adminName') ?? '').trim()
     const adminEmail = String(data.get('adminEmail') ?? '').trim()
-    if (!name || !adminName || !adminEmail) return
+    const adminPassword = String(data.get('adminPassword') ?? '')
+    if (!name || !adminName || !adminEmail || !adminPassword) return
+    if (adminPassword.length < 6) {
+      setToast('Temporary password must be at least 6 characters.')
+      return
+    }
     const plan = String(data.get('plan') ?? 'Starter') as PlanTier
 
     setSaving(true)
     try {
-      // 1. Try RPC function
-      const { data: rpcData, error: rpcError } = await supabase.rpc('create_company_workspace', {
-        p_name: name,
-        p_admin_name: adminName,
-        p_admin_email: adminEmail,
-        p_plan: plan,
-      })
+      let createdOrg: { id: string; org_code: string; name: string; admin_name: string; admin_email: string; plan: string; status: string; created_at: string } | null = null
 
-      let createdOrg = rpcData as { id: string; org_code: string; name: string; admin_name: string; admin_email: string; plan: string; status: string; created_at: string } | null
+      // 1. Try edge function if deployed
+      try {
+        const { data: edgeRes } = await supabase.functions.invoke('create-company', {
+          body: { name, adminName, adminEmail, adminPassword, plan },
+        })
+        if (edgeRes?.organization) {
+          createdOrg = edgeRes.organization
+        }
+      } catch {
+        // Fall back to client-side creation
+      }
 
-      // 2. Fallback to direct table insert if RPC is not present
-      if (rpcError || !createdOrg) {
+      // 2. Direct client-side user registration & company creation
+      if (!createdOrg) {
+        // Create auth user in Supabase without affecting current platform_admin session
+        const authClient = createClient(
+          import.meta.env.VITE_SUPABASE_URL,
+          import.meta.env.VITE_SUPABASE_ANON_KEY,
+          {
+            auth: {
+              persistSession: false,
+              autoRefreshToken: false,
+              detectSessionInUrl: false,
+            },
+          },
+        )
+
+        const { data: authData, error: authErr } = await authClient.auth.signUp({
+          email: adminEmail.toLowerCase(),
+          password: adminPassword,
+          options: {
+            data: { full_name: adminName },
+          },
+        })
+
+        if (authErr && !authErr.message.toLowerCase().includes('already registered')) {
+          throw new Error(`Authentication setup failed: ${authErr.message}`)
+        }
+
+        const newUserId = authData?.user?.id
+
+        // Create organization
         const { data: directOrg, error: directError } = await supabase
           .from('organizations')
           .insert({
@@ -160,10 +198,35 @@ export default function PlatformAdmin({
           .single()
 
         if (directError || !directOrg) {
-          throw new Error(directError?.message ?? rpcError?.message ?? 'Failed to create organization')
+          throw new Error(directError?.message ?? 'Failed to create organization')
         }
 
-        await supabase.from('branches').insert({ organization_id: directOrg.id, name: 'Main branch', is_open: true })
+        // Create default branch
+        const { data: branchData } = await supabase
+          .from('branches')
+          .insert({ organization_id: directOrg.id, name: 'Main branch', is_open: true })
+          .select('id')
+          .single()
+
+        // Create default membership tiers
+        await supabase.from('membership_plans').insert([
+          { organization_id: directOrg.id, name: 'Unlimited annual', price_cents: 59900, billing_cycle: 'year', description: 'Full access to all branches, all year round.' },
+          { organization_id: directOrg.id, name: 'Premium monthly', price_cents: 7900, billing_cycle: 'month', description: 'Unlimited gym access with premium amenities.' },
+          { organization_id: directOrg.id, name: 'Off-peak monthly', price_cents: 4900, billing_cycle: 'month', description: 'Flexible access during off-peak hours.' },
+        ])
+
+        // Assign administrator role and link to organization
+        if (newUserId) {
+          await supabase.from('profiles').upsert({
+            id: newUserId,
+            email: adminEmail.toLowerCase(),
+            full_name: adminName,
+            role: 'org_admin',
+            organization_id: directOrg.id,
+            branch_id: branchData?.id ?? null,
+          })
+        }
+
         createdOrg = directOrg
       }
 
@@ -183,7 +246,7 @@ export default function PlatformAdmin({
       setCompanies((prev) => [company, ...prev])
       setShowCreate(false)
       setActivePage('Companies')
-      setToast(`Workspace created for ${name}.`)
+      setToast(`Workspace created for ${name}! Administrator can sign in with their temporary password.`)
     } catch (error) {
       setToast(`Could not create company: ${error instanceof Error ? error.message : 'Unexpected error.'}`)
     } finally {
@@ -298,8 +361,9 @@ export default function PlatformAdmin({
               <label>Company / gym name<input name="companyName" placeholder="e.g. Summit Fitness" required autoFocus /></label>
               <label>Administrator name<input name="adminName" placeholder="Full name" required /></label>
               <label>Administrator email<input name="adminEmail" type="email" placeholder="admin@company.com" required /></label>
+              <label>Temporary password<input name="adminPassword" type="password" minLength={6} placeholder="At least 6 characters" required /></label>
               <label>Subscription plan<select name="plan" defaultValue="Starter"><option>Starter</option><option>Growth</option><option>Scale</option></select></label>
-              <div className="admin-invite-note">Creates the organization workspace, main branch, and default membership tiers.</div>
+              <div className="admin-invite-note">Creates the organization workspace, main branch, and a sign-in account with this temporary password.</div>
               <div className="admin-modal-actions">
                 <button type="button" className="admin-cancel-button" onClick={() => setShowCreate(false)}>Cancel</button>
                 <button type="submit" className="admin-primary-button" disabled={saving}>
