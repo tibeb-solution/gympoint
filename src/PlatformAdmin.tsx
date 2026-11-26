@@ -133,55 +133,62 @@ export default function PlatformAdmin({
     const plan = String(data.get('plan') ?? 'Starter') as PlanTier
 
     setSaving(true)
-    const { data: createdOrg, error: createError } = await supabase
-      .from('organizations')
-      .insert({
-        name,
-        admin_name: adminName,
-        admin_email: adminEmail,
-        contact_email: adminEmail,
-        plan,
-        status: 'Trial',
+    try {
+      // 1. Try RPC function
+      const { data: rpcData, error: rpcError } = await supabase.rpc('create_company_workspace', {
+        p_name: name,
+        p_admin_name: adminName,
+        p_admin_email: adminEmail,
+        p_plan: plan,
       })
-      .select('id, org_code, name, admin_name, admin_email, plan, status, created_at')
-      .single()
 
-    if (createError || !createdOrg) {
+      let createdOrg = rpcData as { id: string; org_code: string; name: string; admin_name: string; admin_email: string; plan: string; status: string; created_at: string } | null
+
+      // 2. Fallback to direct table insert if RPC is not present
+      if (rpcError || !createdOrg) {
+        const { data: directOrg, error: directError } = await supabase
+          .from('organizations')
+          .insert({
+            name,
+            admin_name: adminName,
+            admin_email: adminEmail,
+            contact_email: adminEmail,
+            plan,
+            status: 'Trial',
+          })
+          .select('id, org_code, name, admin_name, admin_email, plan, status, created_at')
+          .single()
+
+        if (directError || !directOrg) {
+          throw new Error(directError?.message ?? rpcError?.message ?? 'Failed to create organization')
+        }
+
+        await supabase.from('branches').insert({ organization_id: directOrg.id, name: 'Main branch', is_open: true })
+        createdOrg = directOrg
+      }
+
+      const company: Company = {
+        id: createdOrg.id,
+        org_code: createdOrg.org_code,
+        name: createdOrg.name,
+        admin_name: createdOrg.admin_name,
+        admin_email: createdOrg.admin_email,
+        plan: createdOrg.plan as PlanTier,
+        status: createdOrg.status as CompanyStatus,
+        branches: 1,
+        members: 0,
+        created: formatDate(createdOrg.created_at),
+      }
+
+      setCompanies((prev) => [company, ...prev])
+      setShowCreate(false)
+      setActivePage('Companies')
+      setToast(`Workspace created for ${name}.`)
+    } catch (error) {
+      setToast(`Could not create company: ${error instanceof Error ? error.message : 'Unexpected error.'}`)
+    } finally {
       setSaving(false)
-      setToast(createError?.message ?? 'Could not create company workspace.')
-      return
     }
-
-    // Create default branch and pending admin invite
-    await Promise.all([
-      supabase.from('branches').insert({ organization_id: createdOrg.id, name: 'Main branch', is_open: true }),
-      supabase.from('team_invites').insert({
-        organization_id: createdOrg.id,
-        email: adminEmail,
-        full_name: adminName,
-        role: 'org_admin',
-        status: 'Pending',
-      }),
-    ])
-
-    const company: Company = {
-      id: createdOrg.id,
-      org_code: createdOrg.org_code,
-      name: createdOrg.name,
-      admin_name: createdOrg.admin_name,
-      admin_email: createdOrg.admin_email,
-      plan: createdOrg.plan as PlanTier,
-      status: createdOrg.status as CompanyStatus,
-      branches: 1,
-      members: 0,
-      created: formatDate(createdOrg.created_at),
-    }
-
-    setCompanies((prev) => [company, ...prev])
-    setSaving(false)
-    setShowCreate(false)
-    setActivePage('Companies')
-    setToast(`Workspace created for ${name}.`)
   }
 
   const filteredCompanies = useMemo(
@@ -292,7 +299,7 @@ export default function PlatformAdmin({
               <label>Administrator name<input name="adminName" placeholder="Full name" required /></label>
               <label>Administrator email<input name="adminEmail" type="email" placeholder="admin@company.com" required /></label>
               <label>Subscription plan<select name="plan" defaultValue="Starter"><option>Starter</option><option>Growth</option><option>Scale</option></select></label>
-              <div className="admin-invite-note">Creates the organization, a default branch, and a pending admin invite in Supabase.</div>
+              <div className="admin-invite-note">Creates the organization workspace, main branch, and default membership tiers.</div>
               <div className="admin-modal-actions">
                 <button type="button" className="admin-cancel-button" onClick={() => setShowCreate(false)}>Cancel</button>
                 <button type="submit" className="admin-primary-button" disabled={saving}>
@@ -303,7 +310,7 @@ export default function PlatformAdmin({
           </section>
         </div>
       )}
-      {toast && <div className="admin-toast"><span>✓</span>{toast}<button onClick={() => setToast('')} aria-label="Dismiss notification"><AdminIcon name="close" /></button></div>}
+      {toast && <div className="platform-toast"><span>✓</span>{toast}<button onClick={() => setToast('')} aria-label="Dismiss notification"><AdminIcon name="close" /></button></div>}
     </div>
   )
 }
