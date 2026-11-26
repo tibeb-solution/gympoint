@@ -23,6 +23,7 @@ type Organization = {
   primary_location: string | null
   plan: string
   logo_url: string | null
+  status: string | null
 }
 type Branch = {
   id: string
@@ -209,7 +210,7 @@ function App() {
 
     async function loadWorkspace(orgId: string) {
       const [orgRes, branchRes, planRes, memberRes, checkInRes] = await Promise.all([
-        supabase.from('organizations').select('id, name, contact_email, phone, primary_location, plan, logo_url').eq('id', orgId).single(),
+        supabase.from('organizations').select('id, name, contact_email, phone, primary_location, plan, logo_url, status').eq('id', orgId).single(),
         supabase.from('branches').select('id, name, is_open').eq('organization_id', orgId).order('created_at', { ascending: true }),
         supabase.from('membership_plans').select('id, name, price_cents, billing_cycle, description').eq('organization_id', orgId).eq('is_active', true).order('price_cents', { ascending: false }),
         supabase.from('members').select('id, member_code, full_name, email, phone, plan_name, status, avatar_color, joined_at').eq('organization_id', orgId).order('joined_at', { ascending: false }),
@@ -395,7 +396,7 @@ function App() {
       .from('organizations')
       .update(fields)
       .eq('id', activeOrgId)
-      .select('id, name, contact_email, phone, primary_location, plan, logo_url')
+      .select('id, name, contact_email, phone, primary_location, plan, logo_url, status')
       .single()
     setSaving(false)
 
@@ -437,6 +438,39 @@ function App() {
           setAdminView(false)
         }}
       />
+    )
+  }
+
+  if (organization?.status === 'Suspended' && !isPlatformAdmin) {
+    return (
+      <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', background: '#0e1017', color: '#fff', padding: '24px', fontFamily: "'DM Sans', sans-serif" }}>
+        <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', maxWidth: 860, margin: '0 auto', width: '100%', padding: '16px 0' }}>
+          <div className="brand-lockup" style={{ padding: 0 }}>
+            <div className="brand-mark"><img src="/gympoint-icon.png" alt="GymPoint" /></div>
+            <div><strong>gympoint</strong><small>MANAGEMENT PLATFORM</small></div>
+          </div>
+          <button className="button button-outline" onClick={() => void signOut()} style={{ color: '#fff', borderColor: '#2e3240' }}>
+            Sign out
+          </button>
+        </header>
+        <div style={{ margin: 'auto', maxWidth: 500, width: '100%', background: '#161824', border: '1px solid #282b3d', borderRadius: 16, padding: '40px 32px', textAlign: 'center', boxShadow: '0 20px 60px rgba(0,0,0,0.5)' }}>
+          <div style={{ width: 64, height: 64, borderRadius: '50%', background: '#2e1920', color: '#ef4444', display: 'grid', placeItems: 'center', margin: '0 auto 20px', border: '1px solid #7f1d1d' }}>
+            <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="6" y="4" width="4" height="16" rx="1" /><rect x="14" y="4" width="4" height="16" rx="1" /></svg>
+          </div>
+          <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1.5, color: '#f87171', textTransform: 'uppercase' }}>Access Paused</span>
+          <h1 style={{ font: '700 24px Manrope, sans-serif', margin: '10px 0 10px', color: '#fff' }}>Workspace Access Suspended</h1>
+          <p style={{ color: '#9ca3af', fontSize: 13, lineHeight: 1.6, margin: '0 0 24px' }}>
+            Access to <strong>{organization.name}</strong> has been paused by the platform administrator. Access to member records, check-in scanning, and branch operations is currently locked.
+          </p>
+          <div style={{ background: '#1c1f2e', border: '1px solid #2a2e42', borderRadius: 10, padding: '16px', fontSize: 12, color: '#cbd5e1', textAlign: 'left', marginBottom: 24, lineHeight: 1.6 }}>
+            <strong style={{ display: 'block', color: '#fff', marginBottom: 4 }}>Need to reactivate your gym?</strong>
+            Please reach out to your platform administrator or contact support at <strong>support@gympoint.com</strong> to restore full workspace access.
+          </div>
+          <button className="button button-primary" onClick={() => void signOut()} style={{ width: '100%', justifyContent: 'center' }}>
+            Sign out of {organization.name}
+          </button>
+        </div>
+      </div>
     )
   }
 
@@ -505,14 +539,35 @@ function App() {
 
       <main className="main-area">
         {isPlatformAdmin && (
-          <div className="preview-banner-bar">
+          <div className="preview-banner-bar" style={organization?.status === 'Suspended' ? { background: '#2c1418', borderBottom: '1px solid #7f1d1d' } : undefined}>
             <span>
-              <span className="preview-banner-dot" />
+              <span className="preview-banner-dot" style={organization?.status === 'Suspended' ? { background: '#ef4444', boxShadow: '0 0 0 3px #ef444433' } : undefined} />
               Workspace preview mode: <strong>{orgName}</strong>
+              {organization?.status === 'Suspended' && (
+                <span style={{ marginLeft: 8, background: '#ef444422', color: '#fca5a5', padding: '2px 8px', borderRadius: 4, fontSize: 10, fontWeight: 700, border: '1px solid #ef444444' }}>
+                  ACCESS PAUSED
+                </span>
+              )}
             </span>
-            <button className="preview-banner-btn" onClick={() => setAdminView(true)}>
-              ← Back to Platform Admin
-            </button>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              {organization?.status === 'Suspended' && (
+                <button
+                  className="preview-banner-btn"
+                  style={{ background: '#15803d', color: '#fff', borderColor: '#16a34a', fontWeight: 600 }}
+                  onClick={async () => {
+                    if (!activeOrgId) return
+                    await supabase.from('organizations').update({ status: 'Active' }).eq('id', activeOrgId)
+                    setOrganization((prev) => (prev ? { ...prev, status: 'Active' } : null))
+                    setToast(`Resumed access for ${orgName}!`)
+                  }}
+                >
+                  ▶ Resume access
+                </button>
+              )}
+              <button className="preview-banner-btn" onClick={() => setAdminView(true)}>
+                ← Back to Platform Admin
+              </button>
+            </div>
           </div>
         )}
         <header className="topbar">

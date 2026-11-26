@@ -43,7 +43,13 @@ function BuildingIcon({ size = 19 }: { size?: number }) {
   return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2" /><path d="M9 21V9h6v12M7 7h.01M17 7h.01M7 11h.01M17 11h.01" /></svg>
 }
 
-function AdminIcon({ name }: { name: 'grid' | 'building' | 'card' | 'search' | 'plus' | 'logout' | 'arrow' | 'close' }) {
+function AdminIcon({
+  name,
+  size = 19,
+}: {
+  name: 'grid' | 'building' | 'card' | 'search' | 'plus' | 'logout' | 'arrow' | 'close' | 'pause' | 'play' | 'trash'
+  size?: number
+}) {
   const paths = {
     grid: <><rect x="3" y="3" width="7" height="7" rx="1.5" /><rect x="14" y="3" width="7" height="7" rx="1.5" /><rect x="14" y="14" width="7" height="7" rx="1.5" /><rect x="3" y="14" width="7" height="7" rx="1.5" /></>,
     building: <><rect x="3" y="3" width="18" height="18" rx="2" /><path d="M9 21V9h6v12M7 7h.01M17 7h.01M7 11h.01M17 11h.01" /></>,
@@ -53,8 +59,11 @@ function AdminIcon({ name }: { name: 'grid' | 'building' | 'card' | 'search' | '
     logout: <><path d="M10 17l5-5-5-5m5 5H3" /><path d="M12 3h7a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-7" /></>,
     arrow: <><path d="M7 17 17 7M7 7h10v10" /></>,
     close: <><path d="m18 6-12 12M6 6l12 12" /></>,
+    pause: <><rect x="6" y="4" width="4" height="16" rx="1" /><rect x="14" y="4" width="4" height="16" rx="1" /></>,
+    play: <><polygon points="5 3 19 12 5 21 5 3" fill="currentColor" /></>,
+    trash: <><path d="M3 6h18m-2 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m-6 5v6m4-6v6" /></>,
   }
-  return <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{paths[name]}</svg>
+  return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{paths[name]}</svg>
 }
 
 export default function PlatformAdmin({
@@ -75,6 +84,8 @@ export default function PlatformAdmin({
   const [activePage, setActivePage] = useState<AdminPage>('Overview')
   const [search, setSearch] = useState('')
   const [showCreate, setShowCreate] = useState(false)
+  const [companyToDelete, setCompanyToDelete] = useState<Company | null>(null)
+  const [deleting, setDeleting] = useState(false)
   const [toast, setToast] = useState('')
 
   async function loadData() {
@@ -125,6 +136,62 @@ export default function PlatformAdmin({
     const timer = window.setTimeout(() => setToast(''), 3200)
     return () => window.clearTimeout(timer)
   }, [toast])
+
+  async function togglePauseCompany(company: Company) {
+    const nextStatus: CompanyStatus = company.status === 'Suspended' ? 'Active' : 'Suspended'
+    const { error } = await supabase
+      .from('organizations')
+      .update({ status: nextStatus })
+      .eq('id', company.id)
+
+    if (error) {
+      setToast(`Could not update company status: ${error.message}`)
+      return
+    }
+
+    setCompanies((prev) =>
+      prev.map((c) => (c.id === company.id ? { ...c, status: nextStatus } : c))
+    )
+    setToast(
+      nextStatus === 'Suspended'
+        ? `Access paused for ${company.name}. Users in this workspace cannot access the service until resumed.`
+        : `Access resumed for ${company.name}.`
+    )
+  }
+
+  async function confirmDeleteCompany() {
+    if (!companyToDelete) return
+    const target = companyToDelete
+    setDeleting(true)
+    try {
+      // 1. Delete dependent check-ins
+      await supabase.from('check_ins').delete().eq('organization_id', target.id)
+      // 2. Delete dependent payments
+      try { await supabase.from('payments').delete().eq('organization_id', target.id) } catch {}
+      // 3. Delete dependent members
+      await supabase.from('members').delete().eq('organization_id', target.id)
+      // 4. Delete dependent membership plans
+      await supabase.from('membership_plans').delete().eq('organization_id', target.id)
+      // 5. Delete dependent branches
+      await supabase.from('branches').delete().eq('organization_id', target.id)
+      // 6. Delete dependent invitations
+      try { await supabase.from('invitations').delete().eq('organization_id', target.id) } catch {}
+      // 7. Unlink user profiles
+      await supabase.from('profiles').update({ organization_id: null, branch_id: null }).eq('organization_id', target.id)
+      // 8. Delete organization
+      const { error } = await supabase.from('organizations').delete().eq('id', target.id)
+
+      if (error) throw error
+
+      setCompanies((prev) => prev.filter((c) => c.id !== target.id))
+      setCompanyToDelete(null)
+      setToast(`Company "${target.name}" has been permanently deleted.`)
+    } catch (error) {
+      setToast(`Could not delete company: ${error instanceof Error ? error.message : 'Unknown error'}`)
+    } finally {
+      setDeleting(false)
+    }
+  }
 
   async function createCompany(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -342,6 +409,8 @@ export default function PlatformAdmin({
               onCompanies={() => setActivePage('Companies')}
               onCreate={() => setShowCreate(true)}
               onSelectCompany={(id) => onOpenWorkspace(id)}
+              onTogglePause={togglePauseCompany}
+              onRequestDelete={(c) => setCompanyToDelete(c)}
             />
           )}
           {activePage === 'Companies' && (
@@ -353,6 +422,8 @@ export default function PlatformAdmin({
               setSearch={setSearch}
               onCreate={() => setShowCreate(true)}
               onSelectCompany={(id) => onOpenWorkspace(id)}
+              onTogglePause={togglePauseCompany}
+              onRequestDelete={(c) => setCompanyToDelete(c)}
             />
           )}
           {activePage === 'Subscriptions' && <Subscriptions plans={plans} companies={companies} revenue={monthlyRevenue} />}
@@ -387,6 +458,59 @@ export default function PlatformAdmin({
           </section>
         </div>
       )}
+      {companyToDelete && (
+        <div
+          className="admin-modal-backdrop"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget && !deleting) setCompanyToDelete(null)
+          }}
+        >
+          <section className="admin-modal" role="dialog" aria-modal="true" aria-labelledby="delete-company-title">
+            <button
+              className="admin-modal-close"
+              onClick={() => !deleting && setCompanyToDelete(null)}
+              aria-label="Close dialog"
+              disabled={deleting}
+            >
+              <AdminIcon name="close" />
+            </button>
+            <div className="admin-modal-icon" style={{ background: '#fef2f2', color: '#dc2626' }}>
+              <AdminIcon name="trash" size={20} />
+            </div>
+            <h2 id="delete-company-title" style={{ color: '#111827' }}>
+              Delete &quot;{companyToDelete.name}&quot;?
+            </h2>
+            <p style={{ color: '#4b5563', lineHeight: 1.6, margin: '10px 0 16px' }}>
+              Are you sure you want to permanently delete <strong>{companyToDelete.name}</strong>?
+              This will remove all associated members ({companyToDelete.members}), branches ({companyToDelete.branches}),
+              membership tiers, and check-in logs.
+            </p>
+            <div style={{ background: '#fff1f2', border: '1px solid #fecdd3', borderRadius: 8, padding: '12px 14px', fontSize: 11, color: '#be123c', marginBottom: 16 }}>
+              <strong>⚠️ Irreversible action:</strong> The company administrator ({companyToDelete.admin_email}) and all members will immediately lose access to this workspace.
+            </div>
+            <div className="admin-modal-actions">
+              <button
+                type="button"
+                className="admin-cancel-button"
+                onClick={() => setCompanyToDelete(null)}
+                disabled={deleting}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="admin-primary-button"
+                onClick={() => void confirmDeleteCompany()}
+                disabled={deleting}
+                style={{ background: '#dc2626', borderColor: '#b91c1c' }}
+              >
+                <AdminIcon name="trash" size={14} />
+                {deleting ? 'Deleting company...' : 'Permanently Delete'}
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
       {toast && <div className="platform-toast"><span>✓</span>{toast}<button onClick={() => setToast('')} aria-label="Dismiss notification"><AdminIcon name="close" /></button></div>}
     </div>
   )
@@ -402,6 +526,8 @@ function Overview({
   onCompanies,
   onCreate,
   onSelectCompany,
+  onTogglePause,
+  onRequestDelete,
 }: {
   displayName: string
   companies: Company[]
@@ -412,6 +538,8 @@ function Overview({
   onCompanies: () => void
   onCreate: () => void
   onSelectCompany: (id: string) => void
+  onTogglePause: (company: Company) => void
+  onRequestDelete: (company: Company) => void
 }) {
   return (
     <>
@@ -434,7 +562,13 @@ function Overview({
           <div><h2>Company accounts</h2><p>Organizations on the GymPoint platform</p></div>
           <button className="platform-link-button" onClick={onCompanies}>View all companies <span>→</span></button>
         </div>
-        <CompanyTable companies={companies.slice(0, 5)} emptyText={loading ? 'Loading companies...' : 'No company accounts yet.'} onSelectCompany={onSelectCompany} />
+        <CompanyTable
+          companies={companies.slice(0, 5)}
+          emptyText={loading ? 'Loading companies...' : 'No company accounts yet.'}
+          onSelectCompany={onSelectCompany}
+          onTogglePause={onTogglePause}
+          onRequestDelete={onRequestDelete}
+        />
       </section>
       <section className="platform-callout">
         <span className="platform-callout-icon"><AdminIcon name="building" /></span>
@@ -455,6 +589,8 @@ function Companies({
   setSearch,
   onCreate,
   onSelectCompany,
+  onTogglePause,
+  onRequestDelete,
 }: {
   companies: Company[]
   loading: boolean
@@ -463,6 +599,8 @@ function Companies({
   setSearch: (value: string) => void
   onCreate: () => void
   onSelectCompany: (id: string) => void
+  onTogglePause: (company: Company) => void
+  onRequestDelete: (company: Company) => void
 }) {
   return (
     <>
@@ -475,7 +613,13 @@ function Companies({
           <div><h2>All companies <span className="platform-count">{total}</span></h2><p>Company details and subscription status</p></div>
           <label className="platform-search"><AdminIcon name="search" /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search companies..." /></label>
         </div>
-        <CompanyTable companies={companies} emptyText={loading ? 'Loading companies...' : 'No companies match your search.'} onSelectCompany={onSelectCompany} />
+        <CompanyTable
+          companies={companies}
+          emptyText={loading ? 'Loading companies...' : 'No companies match your search.'}
+          onSelectCompany={onSelectCompany}
+          onTogglePause={onTogglePause}
+          onRequestDelete={onRequestDelete}
+        />
       </section>
     </>
   )
@@ -512,15 +656,29 @@ function CompanyTable({
   companies,
   emptyText = 'No company accounts yet.',
   onSelectCompany,
+  onTogglePause,
+  onRequestDelete,
 }: {
   companies: Company[]
   emptyText?: string
   onSelectCompany: (id: string) => void
+  onTogglePause: (company: Company) => void
+  onRequestDelete: (company: Company) => void
 }) {
   return (
     <div className="platform-table-wrap">
       <table className="platform-company-table">
-        <thead><tr><th>COMPANY</th><th>PLAN</th><th>BRANCHES</th><th>MEMBERS</th><th>STATUS</th><th>CREATED</th></tr></thead>
+        <thead>
+          <tr>
+            <th>COMPANY</th>
+            <th>PLAN</th>
+            <th>BRANCHES</th>
+            <th>MEMBERS</th>
+            <th>STATUS</th>
+            <th>CREATED</th>
+            <th style={{ textAlign: 'right', paddingRight: '16px' }}>ACTIONS</th>
+          </tr>
+        </thead>
         <tbody>
           {companies.map((company) => (
             <tr key={company.id} onClick={() => onSelectCompany(company.id)} style={{ cursor: 'pointer' }}>
@@ -541,6 +699,55 @@ function CompanyTable({
               <td>{company.members.toLocaleString()}</td>
               <td><span className={`company-status status-${company.status.toLowerCase()}`}><i />{company.status}</span></td>
               <td>{company.created}</td>
+              <td style={{ textAlign: 'right', paddingRight: '16px', whiteSpace: 'nowrap' }} onClick={(e) => e.stopPropagation()}>
+                <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                  <button
+                    type="button"
+                    title={company.status === 'Suspended' ? 'Resume access for this company' : 'Pause access for this company'}
+                    onClick={() => onTogglePause(company)}
+                    style={{
+                      padding: '4px 10px',
+                      borderRadius: '6px',
+                      fontSize: '11px',
+                      fontWeight: 600,
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '4px',
+                      cursor: 'pointer',
+                      border: '1px solid',
+                      transition: 'all 0.15s ease',
+                      ...(company.status === 'Suspended'
+                        ? { background: '#f0fdf4', borderColor: '#86efac', color: '#15803d' }
+                        : { background: '#fffbeb', borderColor: '#fde68a', color: '#b45309' }),
+                    }}
+                  >
+                    <AdminIcon name={company.status === 'Suspended' ? 'play' : 'pause'} size={13} />
+                    {company.status === 'Suspended' ? 'Resume' : 'Pause'}
+                  </button>
+                  <button
+                    type="button"
+                    title="Permanently delete company"
+                    onClick={() => onRequestDelete(company)}
+                    style={{
+                      padding: '4px 10px',
+                      borderRadius: '6px',
+                      fontSize: '11px',
+                      fontWeight: 600,
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '4px',
+                      cursor: 'pointer',
+                      border: '1px solid #fecaca',
+                      background: '#fef2f2',
+                      color: '#b91c1c',
+                      transition: 'all 0.15s ease',
+                    }}
+                  >
+                    <AdminIcon name="trash" size={13} />
+                    Delete
+                  </button>
+                </div>
+              </td>
             </tr>
           ))}
         </tbody>
