@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { Session } from '@supabase/supabase-js'
 import Auth from './Auth'
 import PlatformAdmin from './PlatformAdmin'
@@ -22,6 +22,7 @@ type Organization = {
   phone: string | null
   primary_location: string | null
   plan: string
+  logo_url: string | null
 }
 type Branch = {
   id: string
@@ -208,7 +209,7 @@ function App() {
 
     async function loadWorkspace(orgId: string) {
       const [orgRes, branchRes, planRes, memberRes, checkInRes] = await Promise.all([
-        supabase.from('organizations').select('id, name, contact_email, phone, primary_location, plan').eq('id', orgId).single(),
+        supabase.from('organizations').select('id, name, contact_email, phone, primary_location, plan, logo_url').eq('id', orgId).single(),
         supabase.from('branches').select('id, name, is_open').eq('organization_id', orgId).order('created_at', { ascending: true }),
         supabase.from('membership_plans').select('id, name, price_cents, billing_cycle, description').eq('organization_id', orgId).eq('is_active', true).order('price_cents', { ascending: false }),
         supabase.from('members').select('id, member_code, full_name, email, phone, plan_name, status, avatar_color, joined_at').eq('organization_id', orgId).order('joined_at', { ascending: false }),
@@ -387,14 +388,14 @@ function App() {
     )
   }
 
-  async function saveOrgSettings(fields: { name: string; contact_email: string; phone: string; primary_location: string }) {
+  async function saveOrgSettings(fields: { name: string; contact_email: string; phone: string; primary_location: string; logo_url?: string | null }) {
     if (!activeOrgId) return
     setSaving(true)
     const { data, error } = await supabase
       .from('organizations')
       .update(fields)
       .eq('id', activeOrgId)
-      .select('id, name, contact_email, phone, primary_location, plan')
+      .select('id, name, contact_email, phone, primary_location, plan, logo_url')
       .single()
     setSaving(false)
 
@@ -448,7 +449,13 @@ function App() {
           <div><strong>gympoint</strong><small>MANAGEMENT PLATFORM</small></div>
         </div>
         <div className="org-switcher">
-          <div className="org-avatar">{orgName.slice(0, 1).toUpperCase()}</div>
+          <div className="org-avatar" style={organization?.logo_url ? { overflow: 'hidden', padding: 0 } : undefined}>
+            {organization?.logo_url ? (
+              <img src={organization.logo_url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+            ) : (
+              orgName.slice(0, 1).toUpperCase()
+            )}
+          </div>
           <div className="org-copy"><strong>{orgName}</strong><span>Organization</span></div>
           <Icon name="down" size={16} />
         </div>
@@ -531,6 +538,7 @@ function App() {
               members={members}
               totalActive={totalActive}
               checkIns={checkIns}
+              membershipPlans={membershipPlans}
               onAddMember={() => setModal('member')}
               onCheckIn={() => setModal('checkin')}
               onViewMembers={() => navigate('Members')}
@@ -601,6 +609,7 @@ function Dashboard({
   members,
   totalActive,
   checkIns,
+  membershipPlans,
   onAddMember,
   onCheckIn,
   onViewMembers,
@@ -610,11 +619,31 @@ function Dashboard({
   members: Member[]
   totalActive: number
   checkIns: CheckIn[]
+  membershipPlans: MembershipPlan[]
   onAddMember: () => void
   onCheckIn: () => void
   onViewMembers: () => void
   onNavigate: (page: Page) => void
 }) {
+  const monthlyRevenue = useMemo(() => {
+    return members
+      .filter((m) => m.status === 'Active')
+      .reduce((sum, m) => {
+        const plan = membershipPlans.find((p) => p.name === m.plan)
+        if (!plan) return sum
+        const rate = plan.billing_cycle === 'year' ? plan.price_cents / 100 / 12 : plan.price_cents / 100
+        return sum + rate
+      }, 0)
+  }, [members, membershipPlans])
+
+  const renewalsDue = useMemo(() => {
+    return members.filter((m) => m.status === 'Pending' || m.status === 'Expired').length
+  }, [members])
+
+  const todayCheckedIn = useMemo(() => {
+    return checkIns.filter((item) => item.status === 'Checked in').length
+  }, [checkIns])
+
   return (
     <div className="dashboard">
       <section className="welcome-row">
@@ -623,32 +652,92 @@ function Dashboard({
       </section>
 
       <section className="metric-grid">
-        <MetricCard title="Active members" value={totalActive.toLocaleString()} change="+12.8%" note="vs. last month" icon="users" tone="purple" chart="m0 21 9-7 7 3 12-12 8 5 11-7" />
-        <MetricCard title="Revenue this month" value={money(24850)} change="+8.2%" note="vs. last month" icon="receipt" tone="green" chart="m0 22 8-4 8 2 10-10 9 2 12-9" />
-        <MetricCard title="Today's check-ins" value={checkIns.filter((item) => item.status === 'Checked in').length.toString().padStart(2, '0')} change="+4.3%" note="vs. last week" icon="scan" tone="orange" chart="m0 22 8-8 9 5 9-10 10 5 11-10" />
-        <MetricCard title="Renewals due" value="18" change="Next 7 days" note="Needs attention" icon="clock" tone="blue" chart="m0 20 8-5 9 4 9-9 10 5 11-10" quiet />
+        <MetricCard
+          title="Active members"
+          value={totalActive.toLocaleString()}
+          change={totalActive > 0 ? `${totalActive} active` : '0 active'}
+          note={members.length > 0 ? `Out of ${members.length} members` : 'No members yet'}
+          icon="users"
+          tone="purple"
+          chart="m0 21 9-7 7 3 12-12 8 5 11-7"
+        />
+        <MetricCard
+          title="Revenue this month"
+          value={money(monthlyRevenue)}
+          change={monthlyRevenue > 0 ? `${totalActive} paying` : '—'}
+          note={monthlyRevenue > 0 ? 'Monthly recurring' : 'No revenue recorded'}
+          icon="receipt"
+          tone="green"
+          chart="m0 22 8-4 8 2 10-10 9 2 12-9"
+        />
+        <MetricCard
+          title="Today's check-ins"
+          value={todayCheckedIn.toString().padStart(2, '0')}
+          change={todayCheckedIn > 0 ? `${todayCheckedIn} visits` : '—'}
+          note={checkIns.length > 0 ? `${checkIns.length} total scanned` : 'No visits today'}
+          icon="scan"
+          tone="orange"
+          chart="m0 22 8-8 9 5 9-10 10 5 11-10"
+        />
+        <MetricCard
+          title="Renewals due"
+          value={renewalsDue.toString()}
+          change={renewalsDue > 0 ? `${renewalsDue} due` : 'All clear'}
+          note={renewalsDue > 0 ? 'Needs attention' : 'All accounts current'}
+          icon="clock"
+          tone="blue"
+          chart="m0 20 8-5 9 4 9-9 10 5 11-10"
+          quiet
+        />
       </section>
 
       <section className="overview-grid">
         <div className="panel revenue-panel">
           <div className="panel-heading"><div><h2>Revenue overview</h2><p>Track how your gym is performing</p></div><button className="select-button">This month <Icon name="down" size={15} /></button></div>
-          <div className="revenue-summary"><strong>$24,850</strong><span className="growth-tag"><Icon name="trend" size={14} /> 8.2%</span><small>vs. $22,950 last month</small></div>
-          <div className="chart-wrap">
-            <div className="chart-y-labels"><span>$30k</span><span>$20k</span><span>$10k</span><span>$0</span></div>
-            <svg className="revenue-chart" viewBox="0 0 640 190" preserveAspectRatio="none" role="img" aria-label="Revenue chart, rising throughout the month">
-              <defs><linearGradient id="chartFill" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stopColor="#8057ee" stopOpacity=".16" /><stop offset="100%" stopColor="#8057ee" stopOpacity="0" /></linearGradient></defs>
-              <path className="gridline" d="M0 16H640M0 66H640M0 116H640M0 166H640" />
-              <path d="M0 148C24 141 31 130 53 136S83 120 107 126 134 96 160 106 192 88 213 99 241 76 267 84 297 64 320 78 347 55 373 63 400 48 427 58 451 38 480 48 504 32 533 39 559 27 586 37 612 15 640 20V180H0Z" fill="url(#chartFill)" />
-              <path d="M0 148C24 141 31 130 53 136S83 120 107 126 134 96 160 106 192 88 213 99 241 76 267 84 297 64 320 78 347 55 373 63 400 48 427 58 451 38 480 48 504 32 533 39 559 27 586 37 612 15 640 20" fill="none" stroke="#7952e8" strokeWidth="3" vectorEffect="non-scaling-stroke" />
-              <circle cx="640" cy="20" r="5" fill="#7952e8" stroke="white" strokeWidth="3" vectorEffect="non-scaling-stroke" />
-            </svg>
+          <div className="revenue-summary">
+            <strong>{money(monthlyRevenue)}</strong>
+            {monthlyRevenue > 0 && <span className="growth-tag"><Icon name="trend" size={14} /> Active</span>}
+            <small>{monthlyRevenue > 0 ? `Across ${totalActive} active membership(s)` : 'No active membership revenue recorded yet'}</small>
           </div>
-          <div className="chart-x-labels"><span>May 1</span><span>May 5</span><span>May 9</span><span>May 13</span><span>May 17</span><span>May 19</span></div>
+          <div className="chart-wrap">
+            {monthlyRevenue > 0 ? (
+              <>
+                <div className="chart-y-labels">
+                  <span>{money(Math.round(monthlyRevenue * 1.2))}</span>
+                  <span>{money(Math.round(monthlyRevenue * 0.8))}</span>
+                  <span>{money(Math.round(monthlyRevenue * 0.4))}</span>
+                  <span>$0</span>
+                </div>
+                <svg className="revenue-chart" viewBox="0 0 640 190" preserveAspectRatio="none" role="img" aria-label="Revenue chart">
+                  <defs><linearGradient id="chartFill" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stopColor="#8057ee" stopOpacity=".16" /><stop offset="100%" stopColor="#8057ee" stopOpacity="0" /></linearGradient></defs>
+                  <path className="gridline" d="M0 16H640M0 66H640M0 116H640M0 166H640" />
+                  <path d="M0 148C24 141 31 130 53 136S83 120 107 126 134 96 160 106 192 88 213 99 241 76 267 84 297 64 320 78 347 55 373 63 400 48 427 58 451 38 480 48 504 32 533 39 559 27 586 37 612 15 640 20V180H0Z" fill="url(#chartFill)" />
+                  <path d="M0 148C24 141 31 130 53 136S83 120 107 126 134 96 160 106 192 88 213 99 241 76 267 84 297 64 320 78 347 55 373 63 400 48 427 58 451 38 480 48 504 32 533 39 559 27 586 37 612 15 640 20" fill="none" stroke="#7952e8" strokeWidth="3" vectorEffect="non-scaling-stroke" />
+                  <circle cx="640" cy="20" r="5" fill="#7952e8" stroke="white" strokeWidth="3" vectorEffect="non-scaling-stroke" />
+                </svg>
+              </>
+            ) : (
+              <div style={{ display: 'grid', placeItems: 'center', height: '100%', color: '#92949d', fontSize: '12px' }}>
+                <span>Add members with active plans to see recurring revenue trends.</span>
+              </div>
+            )}
+          </div>
+          <div className="chart-x-labels"><span>Week 1</span><span>Week 2</span><span>Week 3</span><span>Week 4</span></div>
         </div>
         <div className="panel attendance-panel">
           <div className="panel-heading"><div><h2>Attendance</h2><p>Today’s member activity</p></div><button className="more-button" aria-label="More attendance options"><Icon name="dots" /></button></div>
-          <div className="attendance-total"><div className="donut"><div><strong>{checkIns.filter((item) => item.status === 'Checked in').length + 124}</strong><span>visits</span></div></div><div className="attendance-legend"><div><span className="legend-dot purple-dot" /> Members <b>82%</b></div><div><span className="legend-dot light-purple-dot" /> Day pass <b>12%</b></div><div><span className="legend-dot pale-dot" /> Guests <b>6%</b></div></div></div>
-          <div className="peak-hour"><span className="peak-icon"><Icon name="clock" size={17} /></span><span><strong>Peak hour</strong><small>5:00 PM – 6:00 PM</small></span><b>32 <small>visits</small></b></div>
+          <div className="attendance-total">
+            <div className="donut"><div><strong>{todayCheckedIn}</strong><span>visits</span></div></div>
+            <div className="attendance-legend">
+              <div><span className="legend-dot purple-dot" /> Verified <b>{todayCheckedIn}</b></div>
+              <div><span className="legend-dot pale-dot" /> Denied <b>{checkIns.filter((item) => item.status === 'Access denied').length}</b></div>
+            </div>
+          </div>
+          <div className="peak-hour">
+            <span className="peak-icon"><Icon name="clock" size={17} /></span>
+            <span><strong>Latest check-in</strong><small>{checkIns[0]?.time ?? 'No visits today'}</small></span>
+            <b>{todayCheckedIn} <small>visits</small></b>
+          </div>
         </div>
       </section>
 
@@ -657,13 +746,23 @@ function Dashboard({
           <div className="panel-heading"><div><h2>Recent members</h2><p>Your newest sign-ups</p></div><button className="text-button" onClick={onViewMembers}>View all <span>→</span></button></div>
           <div className="member-table-wrap">
             <table><thead><tr><th>MEMBER</th><th>PLAN</th><th>STATUS</th><th>JOINED</th><th /></tr></thead><tbody>
-              {members.slice(0, 5).map((member) => <tr key={member.id}><td><div className="member-cell"><Avatar member={member} /><div><strong>{member.name}</strong><span>{member.email}</span></div></div></td><td>{member.plan}</td><td><StatusBadge status={member.status} /></td><td>{member.joined}</td><td><button className="row-menu" aria-label={`Options for ${member.name}`}><Icon name="dots" size={18} /></button></td></tr>)}
+              {members.length === 0 ? (
+                <tr><td colSpan={5} style={{ textAlign: 'center', padding: '24px', color: '#92949d' }}>No members registered yet. Click &quot;Add member&quot; to get started.</td></tr>
+              ) : (
+                members.slice(0, 5).map((member) => <tr key={member.id}><td><div className="member-cell"><Avatar member={member} /><div><strong>{member.name}</strong><span>{member.email}</span></div></div></td><td>{member.plan}</td><td><StatusBadge status={member.status} /></td><td>{member.joined}</td><td><button className="row-menu" aria-label={`Options for ${member.name}`}><Icon name="dots" size={18} /></button></td></tr>)
+              )}
             </tbody></table>
           </div>
         </div>
         <div className="panel activity-panel">
           <div className="panel-heading"><div><h2>Recent check-ins</h2><p>Live activity at your gym</p></div><button className="text-button" onClick={() => onNavigate('Check-in')}>View all <span>→</span></button></div>
-          <div className="activity-list">{checkIns.slice(0, 4).map((item) => <div className="activity-item" key={item.id}><div className={`avatar activity-avatar ${item.status === 'Access denied' ? 'avatar-muted' : ''}`}>{item.initials}</div><div className="activity-info"><strong>{item.member}</strong><span>{item.branch} <span className="activity-separator">·</span> {item.time}</span></div><span className={`activity-check ${item.status === 'Access denied' ? 'check-denied' : ''}`}>{item.status === 'Access denied' ? 'Denied' : <Icon name="check" size={15} />}</span></div>)}</div>
+          <div className="activity-list">
+            {checkIns.length === 0 ? (
+              <div style={{ textAlign: 'center', padding: '28px', color: '#92949d', fontSize: '12px' }}>No check-in activity recorded yet today.</div>
+            ) : (
+              checkIns.slice(0, 4).map((item) => <div className="activity-item" key={item.id}><div className={`avatar activity-avatar ${item.status === 'Access denied' ? 'avatar-muted' : ''}`}>{item.initials}</div><div className="activity-info"><strong>{item.member}</strong><span>{item.branch} <span className="activity-separator">·</span> {item.time}</span></div><span className={`activity-check ${item.status === 'Access denied' ? 'check-denied' : ''}`}>{item.status === 'Access denied' ? 'Denied' : <Icon name="check" size={15} />}</span></div>)
+            )}
+          </div>
         </div>
       </section>
     </div>
@@ -677,10 +776,16 @@ function Avatar({ member }: { member: Member }) { return <div className={`avatar
 function StatusBadge({ status }: { status: MemberStatus }) { return <span className={`status-badge status-${status.toLowerCase()}`}><i />{status}</span> }
 
 function MembersPage({ members, total, search, setSearch, status, setStatus, onAdd }: { members: Member[]; total: number; search: string; setSearch: (value: string) => void; status: string; setStatus: (value: string) => void; onAdd: () => void }) {
+  const renewals = members.filter((member) => member.status === 'Pending' || member.status === 'Expired').length
   return (
     <div className="module-page">
       <section className="module-heading"><div><div className="eyebrow"><span className="eyebrow-line" /> PEOPLE</div><h1>Members</h1><p>Manage your member profiles, memberships, and activity.</p></div><button className="button button-primary" onClick={onAdd}><Icon name="plus" size={17} /> Add member</button></section>
-      <div className="member-stats"><div><span>Total members</span><strong>{total.toLocaleString()}</strong><small><b>Synced</b> in Supabase</small></div><div><span>Active members</span><strong>{members.filter((member) => member.status === 'Active').length}</strong><small>Across all branches</small></div><div><span>Pending renewal</span><strong>18</strong><small><b className="warning-text">Due this week</b></small></div><div><span>Avg. member value</span><strong>$68</strong><small>Per month</small></div></div>
+      <div className="member-stats">
+        <div><span>Total members</span><strong>{total.toLocaleString()}</strong><small><b>Synced</b> in Supabase</small></div>
+        <div><span>Active members</span><strong>{members.filter((member) => member.status === 'Active').length}</strong><small>Across all branches</small></div>
+        <div><span>Pending renewal</span><strong>{renewals}</strong><small><b className={renewals > 0 ? 'warning-text' : ''}>{renewals > 0 ? 'Needs attention' : 'All clear'}</b></small></div>
+        <div><span>Directory total</span><strong>{members.length}</strong><small>Filtered records</small></div>
+      </div>
       <div className="panel directory-panel">
         <div className="directory-heading"><div><h2>All members <span className="table-count">{members.length}</span></h2><p>A directory of everyone in your gym.</p></div><div className="directory-controls"><label className="table-search"><Icon name="search" size={17} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search members..." /></label><label className="filter-select"><Icon name="filter" size={16} /><select value={status} onChange={(event) => setStatus(event.target.value)}><option>All status</option><option>Active</option><option>Pending</option><option>Frozen</option><option>Expired</option></select></label><button className="button button-outline export-button" onClick={() => window.print()}><Icon name="download" size={16} /> Export</button></div></div>
         <div className="member-table-wrap">
@@ -712,7 +817,7 @@ function CheckInPage({ checkIns, onCheckIn }: { checkIns: CheckIn[]; onCheckIn: 
   return (
     <div className="module-page">
       <section className="module-heading"><div><div className="eyebrow"><span className="eyebrow-line" /> FRONT DESK</div><h1>Member check-in</h1><p>Validate membership access and see today's activity.</p></div><button className="button button-primary" onClick={onCheckIn}><Icon name="scan" size={17} /> Check in member</button></section>
-      <div className="member-stats checkin-stats"><div><span>Today's visits</span><strong>{checkedIn}</strong><small>Recorded in Supabase</small></div><div><span>Currently checked in</span><strong>{checkedIn}</strong><small>Members in the gym</small></div><div><span>Access denied</span><strong>{checkIns.filter((item) => item.status === 'Access denied').length}</strong><small>Membership needs attention</small></div><div><span>Peak hour</span><strong>5–6 PM</strong><small>32 visits expected</small></div></div>
+      <div className="member-stats checkin-stats"><div><span>Today's visits</span><strong>{checkedIn}</strong><small>Recorded in Supabase</small></div><div><span>Currently checked in</span><strong>{checkedIn}</strong><small>Members in the gym</small></div><div><span>Access denied</span><strong>{checkIns.filter((item) => item.status === 'Access denied').length}</strong><small>Membership needs attention</small></div><div><span>Total activity</span><strong>{checkIns.length}</strong><small>Logged entries</small></div></div>
       <div className="panel directory-panel">
         <div className="directory-heading"><div><h2>Today's activity</h2><p>Live check-in log stored in Supabase.</p></div><button className="select-button">Today, {shortDate()} <Icon name="down" size={15} /></button></div>
         <div className="checkin-activity-list">{checkIns.map((item) => <div className="checkin-row" key={item.id}><div className={`avatar activity-avatar ${item.status === 'Access denied' ? 'avatar-muted' : ''}`}>{item.initials}</div><div className="checkin-row-name"><strong>{item.member}</strong><span>{item.branch} branch</span></div><span className="checkin-time"><Icon name="clock" size={15} /> {item.time}</span><span className={`access-badge ${item.status === 'Access denied' ? 'access-denied' : ''}`}><i />{item.status}</span></div>)}</div>
@@ -741,28 +846,79 @@ function ModulePage({
   members: Member[]
   totalActive: number
   saving: boolean
-  onSaveSettings: (fields: { name: string; contact_email: string; phone: string; primary_location: string }) => void
+  onSaveSettings: (fields: { name: string; contact_email: string; phone: string; primary_location: string; logo_url?: string | null }) => void
   onNavigate: (page: Page) => void
   onToast: (message: string) => void
 }) {
-  const [orgName, setOrgName] = useState(organization?.name ?? 'Atlas Fitness')
+  const [orgName, setOrgName] = useState(organization?.name ?? '')
   const [contactEmail, setContactEmail] = useState(organization?.contact_email ?? '')
   const [phone, setPhone] = useState(organization?.phone ?? '')
   const [location, setLocation] = useState(organization?.primary_location ?? '')
+  const [logoUrl, setLogoUrl] = useState<string | null>(organization?.logo_url ?? null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     setOrgName(organization?.name ?? '')
     setContactEmail(organization?.contact_email ?? '')
     setPhone(organization?.phone ?? '')
     setLocation(organization?.primary_location ?? '')
+    setLogoUrl(organization?.logo_url ?? null)
   }, [organization])
 
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    if (file.size > 2 * 1024 * 1024) {
+      onToast('Logo file size must be under 2MB.')
+      return
+    }
+    const reader = new FileReader()
+    reader.onload = (event) => {
+      const result = event.target?.result as string
+      setLogoUrl(result)
+      onSaveSettings({
+        name: orgName,
+        contact_email: contactEmail,
+        phone,
+        primary_location: location,
+        logo_url: result,
+      })
+    }
+    reader.readAsDataURL(file)
+  }
+
+  const handleRemoveLogo = () => {
+    setLogoUrl(null)
+    onSaveSettings({
+      name: orgName,
+      contact_email: contactEmail,
+      phone,
+      primary_location: location,
+      logo_url: null,
+    })
+  }
+
+  const monthlyRevenue = useMemo(() => {
+    return members
+      .filter((m) => m.status === 'Active')
+      .reduce((sum, m) => {
+        const plan = plans.find((p) => p.name === m.plan)
+        if (!plan) return sum
+        const rate = plan.billing_cycle === 'year' ? plan.price_cents / 100 / 12 : plan.price_cents / 100
+        return sum + rate
+      }, 0)
+  }, [members, plans])
+
+  const renewalsDue = useMemo(() => {
+    return members.filter((m) => m.status === 'Pending' || m.status === 'Expired').length
+  }, [members])
+
   const copy: Record<Exclude<Page, 'Overview' | 'Members' | 'Check-in'>, { eyebrow: string; title: string; subtitle: string; primary: string; metric1: string; value1: string; metric2: string; value2: string; metric3: string; value3: string }> = {
-    Memberships: { eyebrow: 'PLANS & BILLING', title: 'Memberships', subtitle: 'Build plans that keep your community moving.', primary: 'Create a plan', metric1: 'Active plans', value1: `${plans.length}`, metric2: 'Members enrolled', value2: `${totalActive}`, metric3: 'Monthly recurring', value3: '$18,420' },
-    Branches: { eyebrow: 'YOUR ORGANIZATION', title: 'Branches', subtitle: 'Manage your locations and branch operations.', primary: 'Add branch', metric1: 'Total branches', value1: `${branches.length}`, metric2: 'Active members', value2: `${totalActive}`, metric3: 'Locations status', value3: branches.every((b) => b.is_open) ? 'All open' : 'Mixed' },
-    Team: { eyebrow: 'PEOPLE & ACCESS', title: 'Team members', subtitle: 'Manage staff, roles, and branch permissions.', primary: 'Invite team member', metric1: 'Team members', value1: '12', metric2: 'Roles assigned', value2: '6', metric3: 'Pending invites', value3: '2' },
-    Billing: { eyebrow: 'FINANCIALS', title: 'Billing & payments', subtitle: 'Track member payments, invoices, and renewals.', primary: 'Record payment', metric1: 'Collected this month', value1: '$24,850', metric2: 'Outstanding', value2: '$2,460', metric3: 'Upcoming renewals', value3: '18' },
-    Reports: { eyebrow: 'INSIGHTS', title: 'Reports & analytics', subtitle: 'Understand the numbers behind your gym.', primary: 'Export report', metric1: 'Active members', value1: `${totalActive}`, metric2: 'Revenue this month', value2: '$24,850', metric3: 'Visits this month', value3: '2,408' },
+    Memberships: { eyebrow: 'PLANS & BILLING', title: 'Memberships', subtitle: 'Build plans that keep your community moving.', primary: 'Create a plan', metric1: 'Active plans', value1: `${plans.length}`, metric2: 'Members enrolled', value2: `${totalActive}`, metric3: 'Monthly recurring', value3: money(monthlyRevenue) },
+    Branches: { eyebrow: 'YOUR ORGANIZATION', title: 'Branches', subtitle: 'Manage your locations and branch operations.', primary: 'Add branch', metric1: 'Total branches', value1: `${branches.length}`, metric2: 'Active members', value2: `${totalActive}`, metric3: 'Locations status', value3: branches.length === 0 ? 'No branches' : branches.every((b) => b.is_open) ? 'All open' : 'Mixed' },
+    Team: { eyebrow: 'PEOPLE & ACCESS', title: 'Team members', subtitle: 'Manage staff, roles, and branch permissions.', primary: 'Invite team member', metric1: 'Team members', value1: '1', metric2: 'Roles assigned', value2: '1', metric3: 'Pending invites', value3: '0' },
+    Billing: { eyebrow: 'FINANCIALS', title: 'Billing & payments', subtitle: 'Track member payments, invoices, and renewals.', primary: 'Record payment', metric1: 'Monthly recurring', value1: money(monthlyRevenue), metric2: 'Outstanding', value2: '$0', metric3: 'Upcoming renewals', value3: `${renewalsDue}` },
+    Reports: { eyebrow: 'INSIGHTS', title: 'Reports & analytics', subtitle: 'Understand the numbers behind your gym.', primary: 'Export report', metric1: 'Active members', value1: `${totalActive}`, metric2: 'Monthly recurring', value2: money(monthlyRevenue), metric3: 'Active plans', value3: `${plans.length}` },
     Settings: { eyebrow: 'WORKSPACE', title: 'Settings', subtitle: 'Configure your organization and workspace preferences.', primary: saving ? 'Saving...' : 'Save changes', metric1: 'Organization', value1: organization?.name ?? '—', metric2: 'Active branches', value2: `${branches.length}`, metric3: 'Workspace plan', value3: organization?.plan ?? 'Starter' },
   }
   const details = copy[page as keyof typeof copy]
@@ -787,7 +943,7 @@ function ModulePage({
             page === 'Reports'
               ? window.print()
               : page === 'Settings'
-                ? onSaveSettings({ name: orgName, contact_email: contactEmail, phone, primary_location: location })
+                ? onSaveSettings({ name: orgName, contact_email: contactEmail, phone, primary_location: location, logo_url: logoUrl })
                 : onToast(`${details.primary} is ready for setup.`)
           }
         >
@@ -814,9 +970,29 @@ function ModulePage({
       ) : page === 'Settings' ? (
         <div className="panel settings-panel">
           <div className="settings-title">
-            <div className="org-avatar large-org-avatar">{(orgName || 'G').slice(0, 1).toUpperCase()}</div>
+            <div className="org-avatar large-org-avatar" style={logoUrl ? { overflow: 'hidden', padding: 0 } : undefined}>
+              {logoUrl ? (
+                <img src={logoUrl} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+              ) : (
+                (orgName || 'G').slice(0, 1).toUpperCase()
+              )}
+            </div>
             <div><h2>{orgName || 'Organization'}</h2><p>Organization workspace <span className="verified-tag">Active</span></p></div>
-            <button className="button button-outline" onClick={() => onToast('Logo upload will be available in a future release.')}>Upload logo</button>
+            <input
+              type="file"
+              ref={fileInputRef}
+              accept="image/*"
+              style={{ display: 'none' }}
+              onChange={handleFileChange}
+            />
+            <button className="button button-outline" onClick={() => fileInputRef.current?.click()}>
+              {logoUrl ? 'Change logo' : 'Upload logo'}
+            </button>
+            {logoUrl && (
+              <button className="button button-outline" style={{ marginLeft: 8 }} onClick={handleRemoveLogo}>
+                Remove
+              </button>
+            )}
           </div>
           <div className="settings-fields">
             <label>Organization name<input value={orgName} onChange={(e) => setOrgName(e.target.value)} /></label>
@@ -829,8 +1005,8 @@ function ModulePage({
       ) : page === 'Reports' ? (
         <div className="report-grid">
           <div className="panel report-card"><div className="report-icon report-violet"><Icon name="users" /></div><h2>Membership report</h2><p>Active members, sign-ups, renewals, and cancellations.</p><div className="report-chart-bars">{[38, 54, 46, 70, 57, 82, 66, 94, 70, 100, 79, 91].map((height, index) => <i key={index} style={{ height: `${height}%` }} />)}</div><button className="text-button" onClick={() => onNavigate('Members')}>View members <span>→</span></button></div>
-          <div className="panel report-card"><div className="report-icon report-green"><Icon name="receipt" /></div><h2>Revenue report</h2><p>Collected payments, outstanding balances, and renewals.</p><div className="report-highlight"><strong>$24,850</strong><span><Icon name="trend" size={14} /> 8.2% this month</span></div><button className="text-button" onClick={() => onNavigate('Billing')}>View billing <span>→</span></button></div>
-          <div className="panel report-card"><div className="report-icon report-orange"><Icon name="scan" /></div><h2>Attendance report</h2><p>Daily check-ins, peak hours, and branch activity.</p><div className="report-highlight"><strong>2,408</strong><span>Visits this month</span></div><button className="text-button" onClick={() => onNavigate('Check-in')}>View check-ins <span>→</span></button></div>
+          <div className="panel report-card"><div className="report-icon report-green"><Icon name="receipt" /></div><h2>Revenue report</h2><p>Collected payments, outstanding balances, and renewals.</p><div className="report-highlight"><strong>{money(monthlyRevenue)}</strong><span><Icon name="trend" size={14} /> Monthly estimate</span></div><button className="text-button" onClick={() => onNavigate('Billing')}>View billing <span>→</span></button></div>
+          <div className="panel report-card"><div className="report-icon report-orange"><Icon name="scan" /></div><h2>Attendance report</h2><p>Daily check-ins, peak hours, and branch activity.</p><div className="report-highlight"><strong>{totalActive}</strong><span>Active members</span></div><button className="text-button" onClick={() => onNavigate('Check-in')}>View check-ins <span>→</span></button></div>
         </div>
       ) : (
         <div className="panel module-empty">

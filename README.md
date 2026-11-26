@@ -20,6 +20,18 @@ A React + TypeScript gym-management platform backed by Supabase (Auth, PostgreSQ
 
 3. Build for production with `npm run build`.
 
+## Company provisioning
+
+Creating a company also creates its first administrator's Supabase Auth account. Deploy the Edge Function before using this feature:
+
+```sh
+supabase login
+supabase link --project-ref your-project-ref
+supabase functions deploy create-company
+```
+
+The function uses Supabase's hosted `SUPABASE_SERVICE_ROLE_KEY` secret internally. Do not add that key to `.env.local` or any `VITE_` variable.
+
 ## Notes
 
 - Never put a Supabase `service_role` key in any `VITE_` environment variable.

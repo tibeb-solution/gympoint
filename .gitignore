@@ -12,4 +12,5 @@ dist/
 # OS / Editor
 .DS_Store
 *.log
+supabase/.temp/
 

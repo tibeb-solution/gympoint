@@ -15,6 +15,7 @@ type Company = {
   branches: number
   members: number
   created: string
+  logo_url?: string | null
 }
 type PlatformPlan = {
   id: string
@@ -81,7 +82,7 @@ export default function PlatformAdmin({
     const [orgsRes, plansRes] = await Promise.all([
       supabase
         .from('organizations')
-        .select('id, org_code, name, admin_name, admin_email, plan, status, created_at, branches(count), members(count)')
+        .select('id, org_code, name, admin_name, admin_email, plan, status, created_at, logo_url, branches(count), members(count)')
         .order('created_at', { ascending: false }),
       supabase.from('platform_plans').select('id, name, price_cents, caption, included').order('price_cents', { ascending: true }),
     ])
@@ -103,6 +104,7 @@ export default function PlatformAdmin({
           branches: branchCount,
           members: memberCount,
           created: formatDate(row.created_at),
+          logo_url: row.logo_url ?? null,
         }
       })
       setCompanies(mapped)
@@ -140,7 +142,7 @@ export default function PlatformAdmin({
 
     setSaving(true)
     try {
-      let createdOrg: { id: string; org_code: string; name: string; admin_name: string; admin_email: string; plan: string; status: string; created_at: string } | null = null
+      let createdOrg: { id: string; org_code: string; name: string; admin_name: string; admin_email: string; plan: string; status: string; created_at: string; logo_url?: string | null } | null = null
 
       // 1. Try edge function if deployed
       try {
@@ -167,7 +169,7 @@ export default function PlatformAdmin({
             plan,
             status: 'Trial',
           })
-          .select('id, org_code, name, admin_name, admin_email, plan, status, created_at')
+          .select('id, org_code, name, admin_name, admin_email, plan, status, created_at, logo_url')
           .single()
 
         if (directError || !directOrg) {
@@ -251,6 +253,7 @@ export default function PlatformAdmin({
         branches: 1,
         members: 0,
         created: formatDate(createdOrg.created_at),
+        logo_url: createdOrg.logo_url ?? null,
       }
 
       setCompanies((prev) => [company, ...prev])
@@ -523,7 +526,13 @@ function CompanyTable({
             <tr key={company.id} onClick={() => onSelectCompany(company.id)} style={{ cursor: 'pointer' }}>
               <td>
                 <div className="platform-company-cell">
-                  <div className="company-monogram">{company.name.slice(0, 1).toUpperCase()}</div>
+                  <div className="company-monogram" style={company.logo_url ? { overflow: 'hidden', padding: 0 } : undefined}>
+                    {company.logo_url ? (
+                      <img src={company.logo_url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                    ) : (
+                      company.name.slice(0, 1).toUpperCase()
+                    )}
+                  </div>
                   <div><strong>{company.name}</strong><span>{company.admin_email}</span></div>
                 </div>
               </td>
