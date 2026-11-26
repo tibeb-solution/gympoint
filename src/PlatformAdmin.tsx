@@ -156,34 +156,7 @@ export default function PlatformAdmin({
 
       // 2. Direct client-side user registration & company creation
       if (!createdOrg) {
-        // Create auth user in Supabase without affecting current platform_admin session
-        const authClient = createClient(
-          import.meta.env.VITE_SUPABASE_URL,
-          import.meta.env.VITE_SUPABASE_ANON_KEY,
-          {
-            auth: {
-              persistSession: false,
-              autoRefreshToken: false,
-              detectSessionInUrl: false,
-            },
-          },
-        )
-
-        const { data: authData, error: authErr } = await authClient.auth.signUp({
-          email: adminEmail.toLowerCase(),
-          password: adminPassword,
-          options: {
-            data: { full_name: adminName },
-          },
-        })
-
-        if (authErr && !authErr.message.toLowerCase().includes('already registered')) {
-          throw new Error(`Authentication setup failed: ${authErr.message}`)
-        }
-
-        const newUserId = authData?.user?.id
-
-        // Create organization
+        // Create organization in database first
         const { data: directOrg, error: directError } = await supabase
           .from('organizations')
           .insert({
@@ -215,6 +188,38 @@ export default function PlatformAdmin({
           { organization_id: directOrg.id, name: 'Off-peak monthly', price_cents: 4900, billing_cycle: 'month', description: 'Flexible access during off-peak hours.' },
         ])
 
+        // Register user in Supabase Auth without affecting current platform_admin session
+        const authClient = createClient(
+          import.meta.env.VITE_SUPABASE_URL,
+          import.meta.env.VITE_SUPABASE_ANON_KEY,
+          {
+            auth: {
+              persistSession: false,
+              autoRefreshToken: false,
+              detectSessionInUrl: false,
+            },
+          },
+        )
+
+        let authWarning = ''
+        const { data: authData, error: authErr } = await authClient.auth.signUp({
+          email: adminEmail.toLowerCase(),
+          password: adminPassword,
+          options: {
+            data: { full_name: adminName },
+          },
+        })
+
+        if (authErr) {
+          if (authErr.message.toLowerCase().includes('rate limit')) {
+            authWarning = ' (Note: Supabase email rate limit reached; adjust rate limits in Supabase Settings or add user in Auth -> Users)'
+          } else if (!authErr.message.toLowerCase().includes('already registered')) {
+            authWarning = ` (${authErr.message})`
+          }
+        }
+
+        const newUserId = authData?.user?.id
+
         // Assign administrator role and link to organization
         if (newUserId) {
           await supabase.from('profiles').upsert({
@@ -228,6 +233,11 @@ export default function PlatformAdmin({
         }
 
         createdOrg = directOrg
+        if (authWarning) {
+          setToast(`Workspace created for ${name}!${authWarning}`)
+        } else {
+          setToast(`Workspace created for ${name}! Administrator can sign in with their temporary password.`)
+        }
       }
 
       const company: Company = {
