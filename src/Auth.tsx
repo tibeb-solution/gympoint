@@ -48,7 +48,7 @@ export default function Auth({ onSuccess }: { onSuccess?: () => void }) {
           <div className="auth-heading">
             <span className="auth-kicker">WELCOME BACK</span>
             <h2>Sign in to GymPoint</h2>
-            <p>Enter your Supabase account credentials to continue.</p>
+            <p>Enter your account credentials to continue.</p>
           </div>
           <form className="auth-form" onSubmit={signIn}>
             <label>Email address<input type="email" autoComplete="username" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@company.com" required /></label>
@@ -58,7 +58,7 @@ export default function Auth({ onSuccess }: { onSuccess?: () => void }) {
             {error && <div className="auth-error" role="alert">{error}</div>}
             <button type="submit" className="auth-submit" disabled={loading}>{loading ? 'Signing in...' : <>Sign in <span>→</span></>}</button>
           </form>
-          <p className="auth-disclaimer">Authenticated via Supabase Auth. Accounts and roles are managed in your Supabase project.</p>
+          <p className="auth-disclaimer">Authenticated securely. User accounts and organizational roles are managed by platform administrators.</p>
         </div>
         <footer className="auth-footer"><span>© {new Date().getFullYear()} GymPoint Technologies</span><span>Platform administration</span></footer>
       </section>

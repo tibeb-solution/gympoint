@@ -250,14 +250,6 @@ function App() {
       setAdminView(loaded.role === 'platform_admin')
       if (loaded.organization_id) {
         setActiveOrgId(loaded.organization_id)
-      } else if (loaded.role === 'platform_admin') {
-        const { data: firstOrg } = await supabase
-          .from('organizations')
-          .select('id')
-          .order('created_at', { ascending: true })
-          .limit(1)
-          .maybeSingle()
-        if (!cancelled && firstOrg) setActiveOrgId(firstOrg.id)
       }
     }
 
@@ -1080,7 +1072,7 @@ function App() {
               }}
             />
           )}
-          <footer className="page-footer"><span>© {new Date().getFullYear()} GymPoint Technologies</span><span><i className="footer-status" /> Connected to Supabase</span><button onClick={() => setToast('Your workspace data is synced with Supabase.')}>Privacy &amp; security</button></footer>
+          <footer className="page-footer"><span>© {new Date().getFullYear()} GymPoint Technologies</span><span><i className="footer-status" /> System operational</span><button onClick={() => setToast('Your workspace data is encrypted and synced securely.')}>Privacy &amp; security</button></footer>
         </div>
       </main>
 
@@ -1430,7 +1422,7 @@ function MembersPage({
     <div className="module-page">
       <section className="module-heading"><div><div className="eyebrow"><span className="eyebrow-line" /> PEOPLE</div><h1>Members</h1><p>Manage your member profiles, memberships, and health intake.</p></div><button className="button button-primary" onClick={onAdd}><Icon name="plus" size={17} /> Add member</button></section>
       <div className="member-stats">
-        <div><span>Total members</span><strong>{total.toLocaleString()}</strong><small><b>Synced</b> in Supabase</small></div>
+        <div><span>Total members</span><strong>{total.toLocaleString()}</strong><small><b>Synced</b> in real-time</small></div>
         <div><span>Active members</span><strong>{members.filter((member) => member.status === 'Active').length}</strong><small>Across all branches</small></div>
         <div><span>Pending renewal</span><strong>{renewals}</strong><small><b className={renewals > 0 ? 'warning-text' : ''}>{renewals > 0 ? 'Needs attention' : 'All clear'}</b></small></div>
         <div><span>Directory total</span><strong>{members.length}</strong><small>Filtered records</small></div>
@@ -1506,7 +1498,7 @@ function CheckInPage({
       </section>
 
       <div className="member-stats checkin-stats">
-        <div><span>Today&apos;s visits</span><strong>{checkedIn}</strong><small>Recorded in Supabase</small></div>
+        <div><span>Today&apos;s visits</span><strong>{checkedIn}</strong><small>Recorded today</small></div>
         <div><span>Currently checked in</span><strong>{checkedIn}</strong><small>Members in the gym</small></div>
         <div><span>Access denied</span><strong>{checkIns.filter((item) => item.status === 'Access denied').length}</strong><small>Membership issues</small></div>
         <div><span>Sync state</span><strong>Offline Ready</strong><small><span className="badge-pill badge-branch">● Local cache active</span></small></div>
@@ -1752,7 +1744,7 @@ function ModulePage({
               </div>
               <div className="plan-bottom">
                 <span><b>{members.filter((member) => member.plan === plan.name).length}</b> members enrolled</span>
-                <button className="row-menu" onClick={() => onToast('Plan active in Supabase.')}><Icon name="dots" size={18} /></button>
+                <button className="row-menu" onClick={() => onToast('Plan details active.')}><Icon name="dots" size={18} /></button>
               </div>
             </div>
           ))}

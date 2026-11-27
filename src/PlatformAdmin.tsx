@@ -27,13 +27,13 @@ type PlatformPlan = {
 type AdminPage = 'Overview' | 'Companies' | 'Subscriptions'
 
 const defaultPlans: PlatformPlan[] = [
-  { id: 'starter', name: 'Starter', price_cents: 4900, caption: 'For independent studios', included: '1 branch · Up to 250 members' },
-  { id: 'growth', name: 'Growth', price_cents: 12900, caption: 'For growing gym teams', included: 'Up to 5 branches · 1,500 members' },
-  { id: 'scale', name: 'Scale', price_cents: 29900, caption: 'For multi-location brands', included: 'Unlimited branches · 5,000 members' },
+  { id: 'starter', name: 'Starter', price_cents: 250000, caption: 'For independent fitness studios', included: '1 branch · Up to 250 members' },
+  { id: 'growth', name: 'Growth', price_cents: 550000, caption: 'For growing gym teams', included: 'Up to 5 branches · 1,500 members' },
+  { id: 'scale', name: 'Scale', price_cents: 1200000, caption: 'For multi-location brands & chains', included: 'Unlimited branches · Unlimited members' },
 ]
 
 const formatMoney = (value: number) =>
-  new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(value)
+  `ETB ${new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 }).format(value)}`
 
 function formatDate(iso: string) {
   return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' })
@@ -47,7 +47,7 @@ function AdminIcon({
   name,
   size = 19,
 }: {
-  name: 'grid' | 'building' | 'card' | 'search' | 'plus' | 'logout' | 'arrow' | 'close' | 'pause' | 'play' | 'trash'
+  name: 'grid' | 'building' | 'card' | 'search' | 'plus' | 'logout' | 'arrow' | 'close' | 'pause' | 'play' | 'trash' | 'edit'
   size?: number
 }) {
   const paths = {
@@ -62,6 +62,7 @@ function AdminIcon({
     pause: <><rect x="6" y="4" width="4" height="16" rx="1" /><rect x="14" y="4" width="4" height="16" rx="1" /></>,
     play: <><polygon points="5 3 19 12 5 21 5 3" fill="currentColor" /></>,
     trash: <><path d="M3 6h18m-2 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m-6 5v6m4-6v6" /></>,
+    edit: <><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" /><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" /></>,
   }
   return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{paths[name]}</svg>
 }
@@ -84,6 +85,8 @@ export default function PlatformAdmin({
   const [activePage, setActivePage] = useState<AdminPage>('Overview')
   const [search, setSearch] = useState('')
   const [showCreate, setShowCreate] = useState(false)
+  const [editingCompany, setEditingCompany] = useState<Company | null>(null)
+  const [editingPlanTier, setEditingPlanTier] = useState<PlatformPlan | null>(null)
   const [companyToDelete, setCompanyToDelete] = useState<Company | null>(null)
   const [deleting, setDeleting] = useState(false)
   const [toast, setToast] = useState('')
@@ -159,35 +162,67 @@ export default function PlatformAdmin({
     )
   }
 
+  async function handleUpdateCompanySubscription(companyId: string, newPlan: PlanTier, newStatus: CompanyStatus) {
+    setSaving(true)
+    const { error } = await supabase
+      .from('organizations')
+      .update({ plan: newPlan, status: newStatus })
+      .eq('id', companyId)
+    setSaving(false)
+
+    if (error) {
+      setToast(`Could not update subscription: ${error.message}`)
+      return
+    }
+
+    setCompanies((prev) =>
+      prev.map((c) => (c.id === companyId ? { ...c, plan: newPlan, status: newStatus } : c))
+    )
+    setEditingCompany(null)
+    setToast(`Subscription updated to ${newPlan} (${newStatus})!`)
+  }
+
+  async function handleUpdatePlanTier(planId: string, newPriceETB: number, caption: string, included: string) {
+    setSaving(true)
+    const priceCents = Math.round(newPriceETB * 100)
+    try {
+      await supabase.from('platform_plans').upsert({ id: planId, price_cents: priceCents, caption, included })
+    } catch {}
+    setSaving(false)
+
+    setPlans((prev) =>
+      prev.map((p) => (p.id === planId ? { ...p, price_cents: priceCents, caption, included } : p))
+    )
+    setEditingPlanTier(null)
+    setToast('Subscription plan tier updated in Ethiopian Birr!')
+  }
+
   async function confirmDeleteCompany() {
     if (!companyToDelete) return
     const target = companyToDelete
     setDeleting(true)
+
     try {
-      // 1. Delete dependent check-ins
       await supabase.from('check_ins').delete().eq('organization_id', target.id)
-      // 2. Delete dependent payments
       try { await supabase.from('payments').delete().eq('organization_id', target.id) } catch {}
-      // 3. Delete dependent members
       await supabase.from('members').delete().eq('organization_id', target.id)
-      // 4. Delete dependent membership plans
       await supabase.from('membership_plans').delete().eq('organization_id', target.id)
-      // 5. Delete dependent branches
       await supabase.from('branches').delete().eq('organization_id', target.id)
-      // 6. Delete dependent invitations
       try { await supabase.from('invitations').delete().eq('organization_id', target.id) } catch {}
-      // 7. Unlink user profiles
       await supabase.from('profiles').update({ organization_id: null, branch_id: null }).eq('organization_id', target.id)
-      // 8. Delete organization
       const { error } = await supabase.from('organizations').delete().eq('id', target.id)
 
-      if (error) throw error
+      if (error) {
+        setToast(`Could not delete organization: ${error.message}`)
+        setDeleting(false)
+        return
+      }
 
       setCompanies((prev) => prev.filter((c) => c.id !== target.id))
       setCompanyToDelete(null)
-      setToast(`Company "${target.name}" has been permanently deleted.`)
-    } catch (error) {
-      setToast(`Could not delete company: ${error instanceof Error ? error.message : 'Unknown error'}`)
+      setToast(`Deleted "${target.name}" and removed all workspace records.`)
+    } catch (err: any) {
+      setToast(`Deletion error: ${err?.message ?? 'Unknown error'}`)
     } finally {
       setDeleting(false)
     }
@@ -195,140 +230,132 @@ export default function PlatformAdmin({
 
   async function createCompany(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    const data = new FormData(event.currentTarget)
-    const name = String(data.get('companyName') ?? '').trim()
-    const adminName = String(data.get('adminName') ?? '').trim()
-    const adminEmail = String(data.get('adminEmail') ?? '').trim()
-    const adminPassword = String(data.get('adminPassword') ?? '')
-    if (!name || !adminName || !adminEmail || !adminPassword) return
-    if (adminPassword.length < 6) {
-      setToast('Temporary password must be at least 6 characters.')
+    const form = new FormData(event.currentTarget)
+    const companyName = String(form.get('companyName') ?? '').trim()
+    const adminName = String(form.get('adminName') ?? '').trim()
+    const adminEmail = String(form.get('adminEmail') ?? '').trim()
+    const adminPassword = String(form.get('adminPassword') ?? '').trim()
+    const plan = String(form.get('plan') ?? 'Starter') as PlanTier
+
+    if (!companyName || !adminName || !adminEmail || !adminPassword) {
+      setToast('Please complete all company fields including temporary password.')
       return
     }
-    const plan = String(data.get('plan') ?? 'Starter') as PlanTier
 
     setSaving(true)
-    try {
-      let createdOrg: { id: string; org_code: string; name: string; admin_name: string; admin_email: string; plan: string; status: string; created_at: string; logo_url?: string | null } | null = null
 
-      // 1. Try edge function if deployed
+    try {
+      let orgData: any = null
+      let authWarning = ''
+
       try {
         const { data: edgeRes } = await supabase.functions.invoke('create-company', {
-          body: { name, adminName, adminEmail, adminPassword, plan },
+          body: {
+            companyName,
+            adminName,
+            adminEmail,
+            adminPassword,
+            plan,
+          },
         })
         if (edgeRes?.organization) {
-          createdOrg = edgeRes.organization
+          orgData = edgeRes.organization
         }
       } catch {
-        // Fall back to client-side creation
+        // Fallback to direct client creation
       }
 
-      // 2. Direct client-side user registration & company creation
-      if (!createdOrg) {
-        // Create organization in database first
+      if (!orgData) {
         const { data: directOrg, error: directError } = await supabase
           .from('organizations')
           .insert({
-            name,
+            name: companyName,
             admin_name: adminName,
             admin_email: adminEmail,
             contact_email: adminEmail,
+            primary_location: 'Central Branch',
             plan,
-            status: 'Trial',
+            status: 'Active',
           })
-          .select('id, org_code, name, admin_name, admin_email, plan, status, created_at, logo_url')
+          .select('id, org_code, name, admin_name, admin_email, plan, status, created_at')
           .single()
 
         if (directError || !directOrg) {
-          throw new Error(directError?.message ?? 'Failed to create organization')
+          throw new Error(directError?.message ?? 'Failed to register company')
         }
+        orgData = directOrg
 
-        // Create default branch
         const { data: branchData } = await supabase
           .from('branches')
-          .insert({ organization_id: directOrg.id, name: 'Main branch', is_open: true })
+          .insert({
+            organization_id: directOrg.id,
+            name: 'Main branch',
+            is_open: true,
+          })
           .select('id')
           .single()
 
-        // Create default membership tiers
         await supabase.from('membership_plans').insert([
-          { organization_id: directOrg.id, name: 'Unlimited annual', price_cents: 59900, billing_cycle: 'year', description: 'Full access to all branches, all year round.' },
-          { organization_id: directOrg.id, name: 'Premium monthly', price_cents: 7900, billing_cycle: 'month', description: 'Unlimited gym access with premium amenities.' },
-          { organization_id: directOrg.id, name: 'Off-peak monthly', price_cents: 4900, billing_cycle: 'month', description: 'Flexible access during off-peak hours.' },
+          { organization_id: directOrg.id, name: 'Unlimited annual', price_cents: 99000, billing_cycle: 'year', description: 'Full access to all amenities.' },
+          { organization_id: directOrg.id, name: 'Premium monthly', price_cents: 8900, billing_cycle: 'month', description: 'Flexible recurring monthly access.' },
+          { organization_id: directOrg.id, name: 'Starter monthly', price_cents: 4900, billing_cycle: 'month', description: 'Essential access for off-peak hours.' },
         ])
 
-        // Register user in Supabase Auth without affecting current platform_admin session
-        const authClient = createClient(
+        const isolatedAuthClient = createClient(
           import.meta.env.VITE_SUPABASE_URL,
           import.meta.env.VITE_SUPABASE_ANON_KEY,
-          {
-            auth: {
-              persistSession: false,
-              autoRefreshToken: false,
-              detectSessionInUrl: false,
-            },
-          },
+          { auth: { persistSession: false, autoRefreshToken: false } },
         )
 
-        let authWarning = ''
-        const { data: authData, error: authErr } = await authClient.auth.signUp({
-          email: adminEmail.toLowerCase(),
+        const { data: authData, error: authError } = await isolatedAuthClient.auth.signUp({
+          email: adminEmail,
           password: adminPassword,
           options: {
-            data: { full_name: adminName },
+            data: {
+              full_name: adminName,
+              organization_id: directOrg.id,
+              role: 'org_admin',
+            },
           },
         })
 
-        if (authErr) {
-          if (authErr.message.toLowerCase().includes('rate limit')) {
-            authWarning = ' (Note: Supabase email rate limit reached; adjust rate limits in Supabase Settings or add user in Auth -> Users)'
-          } else if (!authErr.message.toLowerCase().includes('already registered')) {
-            authWarning = ` (${authErr.message})`
+        if (authError) {
+          if (authError.message.toLowerCase().includes('rate limit')) {
+            authWarning = ' (Note: Email rate limit reached; adjust rate limits in Settings -> Auth or add user in Auth -> Users)'
+          } else {
+            authWarning = ` (Note: Auth account setup: ${authError.message})`
           }
-        }
-
-        const newUserId = authData?.user?.id
-
-        // Assign administrator role and link to organization
-        if (newUserId) {
+        } else if (authData.user) {
           await supabase.from('profiles').upsert({
-            id: newUserId,
-            email: adminEmail.toLowerCase(),
+            id: authData.user.id,
+            email: adminEmail,
             full_name: adminName,
             role: 'org_admin',
             organization_id: directOrg.id,
             branch_id: branchData?.id ?? null,
           })
         }
-
-        createdOrg = directOrg
-        if (authWarning) {
-          setToast(`Workspace created for ${name}!${authWarning}`)
-        } else {
-          setToast(`Workspace created for ${name}! Administrator can sign in with their temporary password.`)
-        }
       }
 
-      const company: Company = {
-        id: createdOrg.id,
-        org_code: createdOrg.org_code,
-        name: createdOrg.name,
-        admin_name: createdOrg.admin_name,
-        admin_email: createdOrg.admin_email,
-        plan: createdOrg.plan as PlanTier,
-        status: createdOrg.status as CompanyStatus,
+      const newCompany: Company = {
+        id: orgData.id,
+        org_code: orgData.org_code || `GYM-${Math.floor(1000 + Math.random() * 9000)}`,
+        name: orgData.name,
+        admin_name: orgData.admin_name,
+        admin_email: orgData.admin_email,
+        plan: orgData.plan as PlanTier,
+        status: orgData.status as CompanyStatus,
         branches: 1,
         members: 0,
-        created: formatDate(createdOrg.created_at),
-        logo_url: createdOrg.logo_url ?? null,
+        created: formatDate(orgData.created_at || new Date().toISOString()),
+        logo_url: null,
       }
 
-      setCompanies((prev) => [company, ...prev])
+      setCompanies((prev) => [newCompany, ...prev])
       setShowCreate(false)
-      setActivePage('Companies')
-      setToast(`Workspace created for ${name}! Administrator can sign in with their temporary password.`)
-    } catch (error) {
-      setToast(`Could not create company: ${error instanceof Error ? error.message : 'Unexpected error.'}`)
+      setToast(`Created "${companyName}" with plan ${plan}! Temp password set.${authWarning}`)
+    } catch (err: any) {
+      setToast(`Could not create company: ${err.message}`)
     } finally {
       setSaving(false)
     }
@@ -336,17 +363,22 @@ export default function PlatformAdmin({
 
   const filteredCompanies = useMemo(
     () =>
-      companies.filter((company) =>
-        `${company.name} ${company.admin_email} ${company.admin_name} ${company.org_code}`
-          .toLowerCase()
-          .includes(search.toLowerCase()),
-      ),
+      companies.filter((company) => {
+        const query = search.toLowerCase()
+        return (
+          company.name.toLowerCase().includes(query) ||
+          company.admin_email.toLowerCase().includes(query) ||
+          company.admin_name.toLowerCase().includes(query) ||
+          company.org_code.toLowerCase().includes(query)
+        )
+      }),
     [companies, search],
   )
-  const activeCompanies = companies.filter((company) => company.status === 'Active').length
-  const trialCompanies = companies.filter((company) => company.status === 'Trial').length
+
+  const activeCompanies = companies.filter((c) => c.status === 'Active').length
+  const trialCompanies = companies.filter((c) => c.status === 'Trial').length
   const monthlyRevenue = companies
-    .filter((company) => company.status === 'Active')
+    .filter((c) => c.status === 'Active')
     .reduce((total, company) => {
       const matched = plans.find((plan) => plan.name === company.plan)
       return total + (matched ? matched.price_cents / 100 : 0)
@@ -390,10 +422,6 @@ export default function PlatformAdmin({
         <header className="platform-topbar">
           <div className="platform-breadcrumb">Platform <span>/</span> <b>{activePage}</b></div>
           <div className="platform-top-actions">
-            <span className="platform-env"><i /> Supabase connected</span>
-            <button className="platform-outline-button" onClick={() => onOpenWorkspace(companies[0]?.id)}>
-              <BuildingIcon size={16} /> Preview gym workspace
-            </button>
             <button className="platform-logout" onClick={onLogout}><AdminIcon name="logout" /> Sign out</button>
           </div>
         </header>
@@ -411,6 +439,7 @@ export default function PlatformAdmin({
               onSelectCompany={(id) => onOpenWorkspace(id)}
               onTogglePause={togglePauseCompany}
               onRequestDelete={(c) => setCompanyToDelete(c)}
+              onEditSubscription={(c) => setEditingCompany(c)}
             />
           )}
           {activePage === 'Companies' && (
@@ -424,16 +453,26 @@ export default function PlatformAdmin({
               onSelectCompany={(id) => onOpenWorkspace(id)}
               onTogglePause={togglePauseCompany}
               onRequestDelete={(c) => setCompanyToDelete(c)}
+              onEditSubscription={(c) => setEditingCompany(c)}
             />
           )}
-          {activePage === 'Subscriptions' && <Subscriptions plans={plans} companies={companies} revenue={monthlyRevenue} />}
+          {activePage === 'Subscriptions' && (
+            <Subscriptions
+              plans={plans}
+              companies={companies}
+              revenue={monthlyRevenue}
+              onEditPlanTier={(p) => setEditingPlanTier(p)}
+            />
+          )}
           <footer className="platform-footer">
             <span>© {new Date().getFullYear()} GymPoint Technologies</span>
-            <span><i /> Synced with Supabase</span>
+            <span><i className="platform-live-dot" /> Cloud synchronized</span>
             <span>Platform admin</span>
           </footer>
         </div>
       </main>
+
+      {/* Create Company Modal */}
       {showCreate && (
         <div className="admin-modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setShowCreate(false) }}>
           <section className="admin-modal" role="dialog" aria-modal="true" aria-labelledby="create-company-title">
@@ -446,7 +485,15 @@ export default function PlatformAdmin({
               <label>Administrator name<input name="adminName" placeholder="Full name" required /></label>
               <label>Administrator email<input name="adminEmail" type="email" placeholder="admin@company.com" required /></label>
               <label>Temporary password<input name="adminPassword" type="password" minLength={6} placeholder="At least 6 characters" required /></label>
-              <label>Subscription plan<select name="plan" defaultValue="Starter"><option>Starter</option><option>Growth</option><option>Scale</option></select></label>
+              <label>Subscription plan (in Ethiopian Birr)
+                <select name="plan" defaultValue="Starter">
+                  {plans.map((p) => (
+                    <option key={p.id} value={p.name}>
+                      {p.name} — {formatMoney(p.price_cents / 100)} / mo
+                    </option>
+                  ))}
+                </select>
+              </label>
               <div className="admin-invite-note">Creates the organization workspace, main branch, and a sign-in account with this temporary password.</div>
               <div className="admin-modal-actions">
                 <button type="button" className="admin-cancel-button" onClick={() => setShowCreate(false)}>Cancel</button>
@@ -458,6 +505,103 @@ export default function PlatformAdmin({
           </section>
         </div>
       )}
+
+      {/* Edit Company Subscription Modal */}
+      {editingCompany && (
+        <div className="admin-modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setEditingCompany(null) }}>
+          <section className="admin-modal" role="dialog" aria-modal="true">
+            <button className="admin-modal-close" onClick={() => setEditingCompany(null)} aria-label="Close dialog"><AdminIcon name="close" /></button>
+            <div className="admin-modal-icon" style={{ background: '#fff7ed', color: '#ea580c' }}>
+              <AdminIcon name="card" size={20} />
+            </div>
+            <h2>Edit Company Subscription</h2>
+            <p>Change subscription plan tier and billing status for <strong>{editingCompany.name}</strong>.</p>
+            <form onSubmit={(e) => {
+              e.preventDefault()
+              const form = new FormData(e.currentTarget)
+              const plan = form.get('plan') as PlanTier
+              const status = form.get('status') as CompanyStatus
+              void handleUpdateCompanySubscription(editingCompany.id, plan, status)
+            }}>
+              <label>
+                Subscription Plan (in Ethiopian Birr)
+                <select name="plan" defaultValue={editingCompany.plan}>
+                  {plans.map((p) => (
+                    <option key={p.id} value={p.name}>
+                      {p.name} — {formatMoney(p.price_cents / 100)} / month ({p.caption})
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Account Access Status
+                <select name="status" defaultValue={editingCompany.status}>
+                  <option value="Active">Active (Full access)</option>
+                  <option value="Trial">Trial (Evaluating)</option>
+                  <option value="Suspended">Suspended (Access Paused)</option>
+                </select>
+              </label>
+              <div className="admin-modal-actions" style={{ marginTop: '20px' }}>
+                <button type="button" className="admin-cancel-button" onClick={() => setEditingCompany(null)}>Cancel</button>
+                <button type="submit" className="admin-primary-button" disabled={saving}>
+                  {saving ? 'Saving...' : 'Save Subscription'}
+                </button>
+              </div>
+            </form>
+          </section>
+        </div>
+      )}
+
+      {/* Edit Platform Plan Tier Modal */}
+      {editingPlanTier && (
+        <div className="admin-modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setEditingPlanTier(null) }}>
+          <section className="admin-modal" role="dialog" aria-modal="true">
+            <button className="admin-modal-close" onClick={() => setEditingPlanTier(null)} aria-label="Close dialog"><AdminIcon name="close" /></button>
+            <div className="admin-modal-icon" style={{ background: '#eef2ff', color: '#4338ca' }}>
+              <AdminIcon name="card" size={20} />
+            </div>
+            <h2>Edit {editingPlanTier.name} Plan Tier</h2>
+            <p>Configure pricing in Ethiopian Birr (ETB) and tier specifications.</p>
+            <form onSubmit={(e) => {
+              e.preventDefault()
+              const form = new FormData(e.currentTarget)
+              const priceETB = parseFloat(form.get('priceETB') as string)
+              const caption = form.get('caption') as string
+              const included = form.get('included') as string
+              void handleUpdatePlanTier(editingPlanTier.id, priceETB, caption, included)
+            }}>
+              <label>
+                Monthly Price (Ethiopian Birr - ETB)
+                <input
+                  name="priceETB"
+                  type="number"
+                  min="0"
+                  step="100"
+                  defaultValue={editingPlanTier.price_cents / 100}
+                  required
+                  autoFocus
+                />
+              </label>
+              <label>
+                Plan Caption / Subtitle
+                <input name="caption" defaultValue={editingPlanTier.caption} required />
+              </label>
+              <label>
+                Included Features &amp; Limits
+                <input name="included" defaultValue={editingPlanTier.included} required />
+              </label>
+              <div className="admin-modal-actions" style={{ marginTop: '20px' }}>
+                <button type="button" className="admin-cancel-button" onClick={() => setEditingPlanTier(null)}>Cancel</button>
+                <button type="submit" className="admin-primary-button" disabled={saving}>
+                  {saving ? 'Saving...' : 'Save Plan Tier'}
+                </button>
+              </div>
+            </form>
+          </section>
+        </div>
+      )}
+
+      {/* Delete Company Modal */}
       {companyToDelete && (
         <div
           className="admin-modal-backdrop"
@@ -528,6 +672,7 @@ function Overview({
   onSelectCompany,
   onTogglePause,
   onRequestDelete,
+  onEditSubscription,
 }: {
   displayName: string
   companies: Company[]
@@ -540,6 +685,7 @@ function Overview({
   onSelectCompany: (id: string) => void
   onTogglePause: (company: Company) => void
   onRequestDelete: (company: Company) => void
+  onEditSubscription: (company: Company) => void
 }) {
   return (
     <>
@@ -547,7 +693,7 @@ function Overview({
         <div>
           <span className="platform-eyebrow">YOUR PLATFORM AT A GLANCE</span>
           <h1>Good morning, {displayName}</h1>
-          <p>Manage your gym network and subscription accounts.</p>
+          <p>Manage your gym network and subscription accounts in Ethiopian Birr (ETB).</p>
         </div>
         <button className="admin-primary-button" onClick={onCreate}><AdminIcon name="plus" /> Create company</button>
       </section>
@@ -568,13 +714,14 @@ function Overview({
           onSelectCompany={onSelectCompany}
           onTogglePause={onTogglePause}
           onRequestDelete={onRequestDelete}
+          onEditSubscription={onEditSubscription}
         />
       </section>
       <section className="platform-callout">
         <span className="platform-callout-icon"><AdminIcon name="building" /></span>
         <div>
           <strong>One platform, separate gym workspaces</strong>
-          <p>Each company account represents an independent organization with Row Level Security isolation in Supabase. Click any company row to preview its workspace.</p>
+          <p>Each company account represents an independent organization with secure data isolation. Click or touch any registered company to preview its workspace.</p>
         </div>
       </section>
     </>
@@ -591,6 +738,7 @@ function Companies({
   onSelectCompany,
   onTogglePause,
   onRequestDelete,
+  onEditSubscription,
 }: {
   companies: Company[]
   loading: boolean
@@ -601,6 +749,7 @@ function Companies({
   onSelectCompany: (id: string) => void
   onTogglePause: (company: Company) => void
   onRequestDelete: (company: Company) => void
+  onEditSubscription: (company: Company) => void
 }) {
   return (
     <>
@@ -619,17 +768,28 @@ function Companies({
           onSelectCompany={onSelectCompany}
           onTogglePause={onTogglePause}
           onRequestDelete={onRequestDelete}
+          onEditSubscription={onEditSubscription}
         />
       </section>
     </>
   )
 }
 
-function Subscriptions({ plans, companies, revenue }: { plans: PlatformPlan[]; companies: Company[]; revenue: number }) {
+function Subscriptions({
+  plans,
+  companies,
+  revenue,
+  onEditPlanTier,
+}: {
+  plans: PlatformPlan[]
+  companies: Company[]
+  revenue: number
+  onEditPlanTier: (plan: PlatformPlan) => void
+}) {
   return (
     <>
       <section className="platform-page-heading">
-        <div><span className="platform-eyebrow">PLANS & REVENUE</span><h1>Subscriptions</h1><p>Review platform plan tiers and assigned company accounts.</p></div>
+        <div><span className="platform-eyebrow">PLANS & REVENUE</span><h1>Subscriptions</h1><p>Review platform plan tiers in Ethiopian Birr (ETB) and assigned company accounts.</p></div>
         <div className="platform-revenue-total"><span>Estimated monthly recurring</span><strong>{formatMoney(revenue)}</strong></div>
       </section>
       <section className="platform-plan-grid">
@@ -641,12 +801,32 @@ function Subscriptions({ plans, companies, revenue }: { plans: PlatformPlan[]; c
             <h2>{plan.name}</h2>
             <p>{plan.included}</p>
             <div className="platform-plan-company-count"><b>{companies.filter((company) => company.plan === plan.name).length}</b><span>company accounts</span></div>
+            <button
+              type="button"
+              onClick={() => onEditPlanTier(plan)}
+              style={{
+                marginTop: '14px',
+                padding: '6px 12px',
+                borderRadius: '6px',
+                fontSize: '11px',
+                fontWeight: 600,
+                cursor: 'pointer',
+                border: '1px solid #cbd5e1',
+                background: '#f8fafc',
+                color: '#334155',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '6px',
+              }}
+            >
+              <AdminIcon name="edit" size={13} /> Edit Tier &amp; Pricing (ETB)
+            </button>
           </article>
         ))}
       </section>
       <section className="platform-panel subscription-note">
-        <strong>Subscription tiers synced from Supabase</strong>
-        <p>Plan definitions are stored in the <code>platform_plans</code> table. Connect Stripe webhooks when you are ready for automated billing.</p>
+        <strong>Subscription tiers active</strong>
+        <p>Plan definitions are stored in Ethiopian Birr (ETB). Pricing and specs can be updated dynamically at any time.</p>
       </section>
     </>
   )
@@ -658,12 +838,14 @@ function CompanyTable({
   onSelectCompany,
   onTogglePause,
   onRequestDelete,
+  onEditSubscription,
 }: {
   companies: Company[]
   emptyText?: string
   onSelectCompany: (id: string) => void
   onTogglePause: (company: Company) => void
   onRequestDelete: (company: Company) => void
+  onEditSubscription: (company: Company) => void
 }) {
   return (
     <div className="platform-table-wrap">
@@ -671,7 +853,7 @@ function CompanyTable({
         <thead>
           <tr>
             <th>COMPANY</th>
-            <th>PLAN</th>
+            <th>PLAN (ETB)</th>
             <th>BRANCHES</th>
             <th>MEMBERS</th>
             <th>STATUS</th>
@@ -694,13 +876,69 @@ function CompanyTable({
                   <div><strong>{company.name}</strong><span>{company.admin_email}</span></div>
                 </div>
               </td>
-              <td><span className={`platform-plan-badge plan-${company.plan.toLowerCase()}`}>{company.plan}</span></td>
+              <td>
+                <span
+                  className={`platform-plan-badge plan-${company.plan.toLowerCase()}`}
+                  style={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                  title="Click to edit subscription"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    onEditSubscription(company)
+                  }}
+                >
+                  {company.plan} ✎
+                </span>
+              </td>
               <td>{company.branches}</td>
               <td>{company.members.toLocaleString()}</td>
               <td><span className={`company-status status-${company.status.toLowerCase()}`}><i />{company.status}</span></td>
               <td>{company.created}</td>
               <td style={{ textAlign: 'right', paddingRight: '16px', whiteSpace: 'nowrap' }} onClick={(e) => e.stopPropagation()}>
                 <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                  <button
+                    type="button"
+                    title={`Open workspace preview for ${company.name}`}
+                    onClick={() => onSelectCompany(company.id)}
+                    style={{
+                      padding: '4px 10px',
+                      borderRadius: '6px',
+                      fontSize: '11px',
+                      fontWeight: 600,
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '4px',
+                      cursor: 'pointer',
+                      border: '1px solid #c7d2fe',
+                      background: '#eef2ff',
+                      color: '#4338ca',
+                      transition: 'all 0.15s ease',
+                    }}
+                  >
+                    <AdminIcon name="arrow" size={13} />
+                    Preview
+                  </button>
+                  <button
+                    type="button"
+                    title={`Edit subscription plan for ${company.name}`}
+                    onClick={() => onEditSubscription(company)}
+                    style={{
+                      padding: '4px 10px',
+                      borderRadius: '6px',
+                      fontSize: '11px',
+                      fontWeight: 600,
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '4px',
+                      cursor: 'pointer',
+                      border: '1px solid #fed7aa',
+                      background: '#fff7ed',
+                      color: '#c2410c',
+                      transition: 'all 0.15s ease',
+                    }}
+                  >
+                    <AdminIcon name="edit" size={13} />
+                    Edit Plan
+                  </button>
                   <button
                     type="button"
                     title={company.status === 'Suspended' ? 'Resume access for this company' : 'Pause access for this company'}
