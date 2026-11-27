@@ -65,3 +65,26 @@
 .approval-card{border:1px solid #e2e8f0;border-radius:8px;padding:14px;background:#fff;display:flex;justify-content:space-between;align-items:center;gap:12px}
 .qr-badge{background:#1e1b4b;color:#fff;border-radius:6px;padding:3px 6px;font-family:monospace;font-size:10px}
 
+
+
+/* ==============================================================================
+   AVATAR AND PROFILE IMAGE STYLES
+   ============================================================================== */
+.top-avatar, .profile-button .avatar, .platform-user-avatar, .org-avatar {
+  overflow: hidden !important;
+  display: grid;
+  place-items: center;
+}
+.top-avatar img, .profile-button .avatar img, .platform-user-avatar img {
+  width: 100% !important;
+  height: 100% !important;
+  object-fit: cover !important;
+  border-radius: 50% !important;
+  display: block !important;
+}
+.org-avatar img {
+  width: 100% !important;
+  height: 100% !important;
+  object-fit: cover !important;
+  display: block !important;
+}

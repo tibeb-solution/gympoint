@@ -1,4 +1,5 @@
 import { useState, useRef } from 'react'
+import ImageCropModal from './ImageCropModal'
 
 export type ProfileData = {
   id: string
@@ -20,6 +21,7 @@ export default function EditProfileModal({
   const [fullName, setFullName] = useState(profile.full_name || '')
   const [avatarUrl, setAvatarUrl] = useState<string | null>(profile.avatar_url || null)
   const [saving, setSaving] = useState(false)
+  const [cropImageSrc, setCropImageSrc] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -28,9 +30,17 @@ export default function EditProfileModal({
     const reader = new FileReader()
     reader.onload = (event) => {
       const result = event.target?.result as string
-      setAvatarUrl(result)
+      // Open interactive crop & resize modal before setting
+      setCropImageSrc(result)
     }
     reader.readAsDataURL(file)
+    // Clear input so same file can be selected again if needed
+    e.target.value = ''
+  }
+
+  const handleCropApply = (croppedDataUrl: string) => {
+    setAvatarUrl(croppedDataUrl)
+    setCropImageSrc(null)
   }
 
   const handleRemovePhoto = () => {
@@ -57,106 +67,120 @@ export default function EditProfileModal({
     .join('') || 'U'
 
   return (
-    <div className="modal-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose() }}>
-      <div className="modal" role="dialog" aria-modal="true" style={{ width: 'min(100%, 440px)' }}>
-        <button className="modal-close" onClick={onClose} aria-label="Close dialog">✕</button>
-        <div className="modal-icon">👤</div>
-        <h2>Edit Your Profile</h2>
-        <p>Update your personal details and profile picture across the workspace.</p>
+    <>
+      <div className="modal-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose() }}>
+        <div className="modal" role="dialog" aria-modal="true" style={{ width: 'min(100%, 450px)' }}>
+          <button className="modal-close" onClick={onClose} aria-label="Close dialog">✕</button>
+          <div className="modal-icon">👤</div>
+          <h2>Edit Your Profile</h2>
+          <p>Update your personal details and resize your profile picture.</p>
 
-        <form onSubmit={handleSubmit} className="modal-form">
-          <div style={{ display: 'flex', alignItems: 'center', gap: '16px', padding: '10px 0', borderBottom: '1px solid #eff0f3' }}>
-            <div
-              style={{
-                width: '64px',
-                height: '64px',
-                borderRadius: '50%',
-                background: '#ede7ff',
-                color: '#7653e8',
-                display: 'grid',
-                placeItems: 'center',
-                fontSize: '20px',
-                fontWeight: 700,
-                overflow: 'hidden',
-                flexShrink: 0,
-                border: '2px solid #ddd6fe',
-              }}
-            >
-              {avatarUrl ? (
-                <img src={avatarUrl} alt="Avatar" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-              ) : (
-                initials
-              )}
-            </div>
+          <form onSubmit={handleSubmit} className="modal-form">
+            <div style={{ display: 'flex', alignItems: 'center', gap: '16px', padding: '12px 0', borderBottom: '1px solid #eff0f3' }}>
+              <div
+                style={{
+                  width: '68px',
+                  height: '68px',
+                  borderRadius: '50%',
+                  background: '#ede7ff',
+                  color: '#7653e8',
+                  display: 'grid',
+                  placeItems: 'center',
+                  fontSize: '22px',
+                  fontWeight: 700,
+                  overflow: 'hidden',
+                  flexShrink: 0,
+                  border: '2px solid #ddd6fe',
+                  boxShadow: '0 2px 8px rgba(124, 58, 237, 0.15)',
+                }}
+              >
+                {avatarUrl ? (
+                  <img src={avatarUrl} alt="Avatar preview" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                ) : (
+                  initials
+                )}
+              </div>
 
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-              <input
-                type="file"
-                ref={fileInputRef}
-                accept="image/*"
-                style={{ display: 'none' }}
-                onChange={handleFileChange}
-              />
-              <div style={{ display: 'flex', gap: '8px' }}>
-                <button
-                  type="button"
-                  className="button button-outline"
-                  style={{ padding: '6px 12px', fontSize: '11px' }}
-                  onClick={() => fileInputRef.current?.click()}
-                >
-                  {avatarUrl ? 'Change photo' : 'Upload photo'}
-                </button>
-                {avatarUrl && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                <input
+                  type="file"
+                  ref={fileInputRef}
+                  accept="image/*"
+                  style={{ display: 'none' }}
+                  onChange={handleFileChange}
+                />
+                <div style={{ display: 'flex', gap: '8px' }}>
                   <button
                     type="button"
                     className="button button-outline"
-                    style={{ padding: '6px 10px', fontSize: '11px', color: '#dc2626', borderColor: '#fecaca' }}
-                    onClick={handleRemovePhoto}
+                    style={{ padding: '6px 12px', fontSize: '11px' }}
+                    onClick={() => fileInputRef.current?.click()}
                   >
-                    Remove
+                    {avatarUrl ? 'Change & Resize' : 'Upload & Resize'}
                   </button>
-                )}
+                  {avatarUrl && (
+                    <button
+                      type="button"
+                      className="button button-outline"
+                      style={{ padding: '6px 10px', fontSize: '11px', color: '#dc2626', borderColor: '#fecaca' }}
+                      onClick={handleRemovePhoto}
+                    >
+                      Remove
+                    </button>
+                  )}
+                </div>
+                <span style={{ fontSize: '10px', color: '#94a3b8' }}>PNG, JPG or WebP (interactive zoom &amp; reposition)</span>
               </div>
-              <span style={{ fontSize: '10px', color: '#94a3b8' }}>PNG, JPG or WebP up to 5MB</span>
             </div>
-          </div>
 
-          <label>
-            Full Name
-            <input
-              type="text"
-              required
-              value={fullName}
-              onChange={(e) => setFullName(e.target.value)}
-              placeholder="e.g. Abebe Bikila"
-            />
-          </label>
+            <label>
+              Full Name
+              <input
+                type="text"
+                required
+                value={fullName}
+                onChange={(e) => setFullName(e.target.value)}
+                placeholder="e.g. Muaz Siraj"
+              />
+            </label>
 
-          <label>
-            Email Address
-            <input
-              type="email"
-              disabled
-              value={profile.email}
-              style={{ background: '#f8fafc', color: '#64748b', cursor: 'not-allowed' }}
-            />
-          </label>
+            <label>
+              Email Address
+              <input
+                type="email"
+                disabled
+                value={profile.email}
+                style={{ background: '#f8fafc', color: '#64748b', cursor: 'not-allowed' }}
+              />
+            </label>
 
-          <label>
-            Role
-            <div style={{ display: 'flex', alignItems: 'center', height: '38px', padding: '0 10px', background: '#f8fafc', borderRadius: '6px', border: '1px solid #e2e8f0', fontSize: '11px', color: '#475569', textTransform: 'capitalize' }}>
-              {profile.role.replace('_', ' ')}
+            <label>
+              Role
+              <div style={{ display: 'flex', alignItems: 'center', height: '38px', padding: '0 10px', background: '#f8fafc', borderRadius: '6px', border: '1px solid #e2e8f0', fontSize: '11px', color: '#475569', textTransform: 'capitalize' }}>
+                {profile.role.replace('_', ' ')}
+              </div>
+            </label>
+
+            <div className="modal-actions">
+              <button type="button" className="button button-outline" onClick={onClose}>Cancel</button>
+              <button type="submit" className="button button-primary" disabled={saving}>
+                {saving ? 'Saving...' : 'Save Profile'}
+              </button>
             </div>
-          </label>
-
-          <div className="modal-actions">
-            <button type="button" className="button button-outline" onClick={onClose}>Cancel</button>
-            <button type="submit" className="button button-primary" disabled={saving}>
-              {saving ? 'Saving...' : 'Save Profile'}
-            </button>
-          </div>
-        </form>
+          </form>
+        </div>
       </div>
-    </div>
+
+      {/* Interactive Crop & Resize Modal */}
+      {cropImageSrc && (
+        <ImageCropModal
+          imageSrc={cropImageSrc}
+          title="Resize & Position Profile Picture"
+          circular={true}
+          onClose={() => setCropImageSrc(null)}
+          onApply={handleCropApply}
+        />
+      )}
+    </>
   )
 }

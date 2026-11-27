@@ -13,6 +13,7 @@ import InviteTeamModal from './components/InviteTeamModal'
 import GuestCheckInModal from './components/GuestCheckInModal'
 import QRScannerModal from './components/QRScannerModal'
 import EditProfileModal from './components/EditProfileModal'
+import ImageCropModal from './components/ImageCropModal'
 
 type MemberStatus = 'Active' | 'Pending' | 'Frozen' | 'Expired' | 'Cancelled'
 type Page = 'Overview' | 'Members' | 'Memberships' | 'Check-in' | 'Branches' | 'Team' | 'Billing' | 'Reports' | 'Settings'
@@ -1697,7 +1698,7 @@ function ModulePage({
   saving,
   onSaveSettings,
   onNavigate,
-  onToast,
+  onToast: _onToast,
   onOpenCreatePlan,
   onEditPlan,
   onOpenAddBranch,
@@ -1738,6 +1739,10 @@ function ModulePage({
   const [logoUrl, setLogoUrl] = useState<string | null>(organization?.logo_url ?? null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
+  // Cropper states for personal avatar and gym logo
+  const [cropProfileSrc, setCropProfileSrc] = useState<string | null>(null)
+  const [cropLogoSrc, setCropLogoSrc] = useState<string | null>(null)
+
   // Personal user profile state
   const [profileName, setProfileName] = useState(profile?.full_name ?? '')
   const [profileAvatarUrl, setProfileAvatarUrl] = useState<string | null>(profile?.avatar_url ?? null)
@@ -1754,17 +1759,19 @@ function ModulePage({
   const handleProfileAvatarChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
-    if (file.size > 5 * 1024 * 1024) {
-      onToast('Profile photo size must be under 5MB.')
-      return
-    }
     const reader = new FileReader()
-    reader.onload = async (event) => {
+    reader.onload = (event) => {
       const result = event.target?.result as string
-      setProfileAvatarUrl(result)
-      await onUpdateProfile({ full_name: profileName || profile?.full_name || '', avatar_url: result })
+      setCropProfileSrc(result)
     }
     reader.readAsDataURL(file)
+    e.target.value = ''
+  }
+
+  const handleApplyProfileCrop = async (croppedUrl: string) => {
+    setProfileAvatarUrl(croppedUrl)
+    setCropProfileSrc(null)
+    await onUpdateProfile({ full_name: profileName || profile?.full_name || '', avatar_url: croppedUrl })
   }
 
   const handleSaveProfile = async (e: React.FormEvent) => {
@@ -1788,23 +1795,25 @@ function ModulePage({
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
-    if (file.size > 2 * 1024 * 1024) {
-      onToast('Logo file size must be under 2MB.')
-      return
-    }
     const reader = new FileReader()
     reader.onload = (event) => {
       const result = event.target?.result as string
-      setLogoUrl(result)
-      onSaveSettings({
-        name: orgName,
-        contact_email: contactEmail,
-        phone,
-        primary_location: location,
-        logo_url: result,
-      })
+      setCropLogoSrc(result)
     }
     reader.readAsDataURL(file)
+    e.target.value = ''
+  }
+
+  const handleApplyLogoCrop = (croppedUrl: string) => {
+    setLogoUrl(croppedUrl)
+    setCropLogoSrc(null)
+    onSaveSettings({
+      name: orgName,
+      contact_email: contactEmail,
+      phone,
+      primary_location: location,
+      logo_url: croppedUrl,
+    })
   }
 
   const handleRemoveLogo = () => {
@@ -2223,6 +2232,28 @@ function ModulePage({
           <div className="panel report-card"><div className="report-icon report-green"><Icon name="receipt" /></div><h2>Revenue report</h2><p>Collected payments, outstanding balances, and renewals.</p><div className="report-highlight"><strong>{money(monthlyRevenue)}</strong><span><Icon name="trend" size={14} /> Monthly estimate</span></div><button className="text-button" onClick={() => onNavigate('Billing')}>View billing <span>→</span></button></div>
           <div className="panel report-card"><div className="report-icon report-orange"><Icon name="scan" /></div><h2>Attendance report</h2><p>Daily check-ins, peak hours, and branch activity.</p><div className="report-highlight"><strong>{totalActive}</strong><span>Active members</span></div><button className="text-button" onClick={() => onNavigate('Check-in')}>View check-ins <span>→</span></button></div>
         </div>
+      )}
+
+      {/* Interactive Crop & Resize for Personal Avatar */}
+      {cropProfileSrc && (
+        <ImageCropModal
+          imageSrc={cropProfileSrc}
+          title="Resize & Position Profile Picture"
+          circular={true}
+          onClose={() => setCropProfileSrc(null)}
+          onApply={handleApplyProfileCrop}
+        />
+      )}
+
+      {/* Interactive Crop & Resize for Gym Logo */}
+      {cropLogoSrc && (
+        <ImageCropModal
+          imageSrc={cropLogoSrc}
+          title="Resize & Position Gym Logo"
+          circular={false}
+          onClose={() => setCropLogoSrc(null)}
+          onApply={handleApplyLogoCrop}
+        />
       )}
     </div>
   )
