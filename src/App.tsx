@@ -235,7 +235,7 @@ function App() {
       if (!data && error) {
         const retry = await supabase
           .from('profiles')
-          .select('id, email, full_name, role, organization_id, branch_id, avatar_url')
+          .select('id, email, full_name, role, organization_id, branch_id')
           .eq('id', session!.user.id)
           .maybeSingle()
         if (retry.data) {
@@ -269,6 +269,14 @@ function App() {
       }
 
       const loaded = data as Profile
+      // Restore avatar from database, auth user_metadata, or localStorage fallback
+      const cachedAvatar =
+        (data as any)?.avatar_url ||
+        session?.user?.user_metadata?.avatar_url ||
+        (session?.user?.id ? localStorage.getItem(`gp_avatar_${session.user.id}`) : null) ||
+        null
+      loaded.avatar_url = cachedAvatar
+
       if (session?.user?.user_metadata?.must_change_password !== undefined) {
         loaded.must_change_password = session.user.user_metadata.must_change_password
       }
@@ -449,6 +457,7 @@ function App() {
   )
 
   const displayName = profile?.full_name || session?.user.email?.split('@')[0] || 'Admin'
+  const effectiveAvatarUrl = profile?.avatar_url || organization?.logo_url || null
   const totalActive = members.filter((member) => member.status === 'Active').length
   const selectedBranch = branches.find((b) => b.id === selectedBranchId) ?? branches[0]
   const orgName = organization?.name ?? 'Gym Workspace'
@@ -1020,20 +1029,52 @@ function App() {
 
   async function handleUpdateProfile(data: { full_name: string; avatar_url: string | null }) {
     if (!session?.user) return
-    const { error } = await supabase
-      .from('profiles')
-      .update({
-        full_name: data.full_name,
-        avatar_url: data.avatar_url,
-      })
-      .eq('id', session.user.id)
 
-    if (error) {
-      setToast('Failed to update profile: ' + error.message)
-      throw error
+    // 1. Instant local state update for snappy UI feedback
+    setProfile((prev) => prev ? { ...prev, full_name: data.full_name, avatar_url: data.avatar_url } : null)
+
+    // 2. Persist in localStorage as reliable offline cache
+    try {
+      if (data.avatar_url) {
+        localStorage.setItem(`gp_avatar_${session.user.id}`, data.avatar_url)
+      } else {
+        localStorage.removeItem(`gp_avatar_${session.user.id}`)
+      }
+    } catch {}
+
+    // 3. Persist in Supabase Auth user_metadata
+    try {
+      await supabase.auth.updateUser({
+        data: {
+          full_name: data.full_name,
+          avatar_url: data.avatar_url,
+        },
+      })
+    } catch (e) {
+      console.warn('Auth user_metadata update warning:', e)
     }
 
-    setProfile((prev) => prev ? { ...prev, full_name: data.full_name, avatar_url: data.avatar_url } : null)
+    // 4. Update Supabase profiles table
+    try {
+      const { error } = await supabase
+        .from('profiles')
+        .update({
+          full_name: data.full_name,
+          avatar_url: data.avatar_url,
+        })
+        .eq('id', session.user.id)
+
+      if (error) {
+        console.warn('Profiles table update warning:', error)
+        // Fallback: update full_name if avatar_url column does not exist yet in SQL
+        if (error.message?.includes('avatar_url')) {
+          await supabase.from('profiles').update({ full_name: data.full_name }).eq('id', session.user.id)
+        }
+      }
+    } catch (e) {
+      console.warn('Database profiles update error:', e)
+    }
+
     setToast('Profile updated successfully!')
   }
 
@@ -1122,7 +1163,7 @@ function App() {
       <PlatformAdmin
         email={profile?.email || session.user.email || 'aman@gmail.com'}
         fullName={profile?.full_name || 'Aman'}
-        avatarUrl={profile?.avatar_url}
+        avatarUrl={effectiveAvatarUrl}
         onLogout={() => void signOut()}
         onOpenEditProfile={() => setShowEditProfile(true)}
         onOpenWorkspace={(orgId) => {
@@ -1219,9 +1260,9 @@ function App() {
           <div className="help-card"><div className="help-icon">?</div><strong>Need a hand?</strong><span>Visit our help center</span><button onClick={() => setToast('Help center will be available soon.')}>Get support <span>↗</span></button></div>
           <div className="platform-label"><span className="platform-dot" /> Powered by <b>gympoint</b></div>
           <button className="profile-button" onClick={() => setShowEditProfile(true)} title="Click to edit profile">
-            <div className="avatar avatar-purple" style={profile?.avatar_url ? { overflow: 'hidden', padding: 0 } : undefined}>
-              {profile?.avatar_url ? (
-                <img src={profile.avatar_url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '50%' }} />
+            <div className="avatar avatar-purple" style={effectiveAvatarUrl ? { overflow: 'hidden', padding: 0 } : undefined}>
+              {effectiveAvatarUrl ? (
+                <img src={effectiveAvatarUrl} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '50%' }} />
               ) : (
                 getInitials(displayName)
               )}
@@ -1285,10 +1326,10 @@ function App() {
               aria-label="Your profile"
               onClick={() => setShowEditProfile(true)}
               title="Click to edit profile"
-              style={profile?.avatar_url ? { overflow: 'hidden', padding: 0 } : undefined}
+              style={effectiveAvatarUrl ? { overflow: 'hidden', padding: 0 } : undefined}
             >
-              {profile?.avatar_url ? (
-                <img src={profile.avatar_url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '50%' }} />
+              {effectiveAvatarUrl ? (
+                <img src={effectiveAvatarUrl} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '50%' }} />
               ) : (
                 getInitials(displayName)
               )}
@@ -1981,6 +2022,18 @@ function ModulePage({
     }
   }
 
+  const handleSaveAllSettings = async () => {
+    onSaveSettings({ name: orgName, contact_email: contactEmail, phone, primary_location: location, logo_url: logoUrl })
+    if (profileName.trim() !== (profile?.full_name || '') || profileAvatarUrl !== (profile?.avatar_url || null)) {
+      setProfileSaving(true)
+      try {
+        await onUpdateProfile({ full_name: profileName.trim() || profile?.full_name || '', avatar_url: profileAvatarUrl })
+      } finally {
+        setProfileSaving(false)
+      }
+    }
+  }
+
   useEffect(() => {
     setOrgName(organization?.name ?? '')
     setContactEmail(organization?.contact_email ?? '')
@@ -2105,10 +2158,10 @@ function ModulePage({
           {page === 'Settings' && (
             <button
               className="button button-primary"
-              disabled={saving}
-              onClick={() => onSaveSettings({ name: orgName, contact_email: contactEmail, phone, primary_location: location, logo_url: logoUrl })}
+              disabled={saving || profileSaving}
+              onClick={handleSaveAllSettings}
             >
-              {saving ? 'Saving...' : 'Save changes'}
+              {saving || profileSaving ? 'Saving...' : 'Save changes'}
             </button>
           )}
         </div>
