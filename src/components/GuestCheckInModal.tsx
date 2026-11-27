@@ -19,7 +19,7 @@ export default function GuestCheckInModal({
 }) {
   const [guestName, setGuestName] = useState('')
   const [phone, setPhone] = useState('')
-  const [passType, setPassType] = useState('Day Pass ($15)')
+  const [passType, setPassType] = useState('Day Pass (ETB 250)')
   const [hostMember, setHostMember] = useState('')
   const [saving, setSaving] = useState(false)
 
@@ -28,7 +28,7 @@ export default function GuestCheckInModal({
     if (!guestName.trim()) return
 
     setSaving(true)
-    const fee = passType.includes('15') ? 15 : passType.includes('25') ? 25 : 0
+    const fee = passType.includes('250') ? 250 : passType.includes('1,200') || passType.includes('1200') ? 1200 : 0
     await onSubmit({
       guestName: guestName.trim(),
       phone: phone.trim(),
@@ -73,8 +73,8 @@ export default function GuestCheckInModal({
           <label>
             Visitor pass type
             <select value={passType} onChange={(e) => setPassType(e.target.value)}>
-              <option>Day Pass ($15)</option>
-              <option>One-Week Trial Pass ($25)</option>
+              <option>Day Pass (ETB 250)</option>
+              <option>One-Week Trial Pass (ETB 1,200)</option>
               <option>Complimentary Guest of Member</option>
               <option>VIP Prospect Tour</option>
             </select>

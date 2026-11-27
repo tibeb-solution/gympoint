@@ -7,6 +7,7 @@ import MemberProfileModal, { type MemberDetail } from './components/MemberProfil
 import ReceiptModal, { type ReceiptData } from './components/ReceiptModal'
 import RecordPaymentModal from './components/RecordPaymentModal'
 import CreatePlanModal from './components/CreatePlanModal'
+import EditPlanModal from './components/EditPlanModal'
 import BranchModal from './components/BranchModal'
 import InviteTeamModal from './components/InviteTeamModal'
 import GuestCheckInModal from './components/GuestCheckInModal'
@@ -114,7 +115,8 @@ const pageIcons: Record<Page, string> = {
   Overview: 'grid', Members: 'users', Memberships: 'card', 'Check-in': 'scan',
   Branches: 'building', Team: 'user', Billing: 'receipt', Reports: 'chart', Settings: 'settings',
 }
-const money = (value: number) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(value)
+const money = (value: number) =>
+  `ETB ${new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 }).format(value)}`
 const longDate = () => new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' }).toUpperCase()
 const shortDate = () => new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
 
@@ -179,6 +181,7 @@ function App() {
   const [selectedReceipt, setSelectedReceipt] = useState<ReceiptData | null>(null)
   const [showRecordPayment, setShowRecordPayment] = useState(false)
   const [showCreatePlan, setShowCreatePlan] = useState(false)
+  const [editingPlan, setEditingPlan] = useState<MembershipPlan | null>(null)
   const [showAddBranch, setShowAddBranch] = useState(false)
   const [showInviteTeam, setShowInviteTeam] = useState(false)
   const [showGuestCheckIn, setShowGuestCheckIn] = useState(false)
@@ -291,9 +294,9 @@ function App() {
         setMembershipPlans(planRes.data as MembershipPlan[])
       } else {
         setMembershipPlans([
-          { id: 'p1', name: 'Unlimited Annual', price_cents: 99000, billing_cycle: 'year', description: 'Complete 24/7 all-access membership to all amenities.', branch_access: 'all' },
-          { id: 'p2', name: 'Monthly All-Access', price_cents: 8900, billing_cycle: 'month', description: 'Flexible recurring monthly access to weights & classes.', branch_access: 'all' },
-          { id: 'p3', name: 'Home Branch Pass', price_cents: 4900, billing_cycle: 'month', description: 'Access exclusively to your home branch.', branch_access: 'home_only' },
+          { id: 'p1', name: 'Unlimited Annual', price_cents: 1800000, billing_cycle: 'year', description: 'Complete 24/7 all-access membership to all amenities.', branch_access: 'all' },
+          { id: 'p2', name: 'Monthly All-Access', price_cents: 180000, billing_cycle: 'month', description: 'Flexible recurring monthly access to weights & classes.', branch_access: 'all' },
+          { id: 'p3', name: 'Home Branch Pass', price_cents: 120000, billing_cycle: 'month', description: 'Access exclusively to your home branch.', branch_access: 'home_only' },
         ])
       }
 
@@ -564,7 +567,7 @@ function App() {
       paid_at: paidAt,
       notes: data.notes,
     })
-    setToast(`Payment of $${data.amountDollars} recorded! Receipt ready.`)
+    setToast(`Payment of ETB ${data.amountDollars} recorded! Receipt ready.`)
   }
 
   // Create Membership Plan
@@ -609,6 +612,66 @@ function App() {
 
     setShowCreatePlan(false)
     setToast(`Plan "${data.name}" published successfully!`)
+  }
+
+  // Update Membership Plan
+  async function handleUpdatePlan(data: {
+    id: string
+    name: string
+    priceDollars: number
+    billingCycle: 'month' | 'year' | 'one_time'
+    description: string
+    branchAccess: 'all' | 'home_only'
+  }) {
+    if (!activeOrgId) return
+    const priceCents = Math.round(data.priceDollars * 100)
+
+    const { error } = await supabase
+      .from('membership_plans')
+      .update({
+        name: data.name,
+        price_cents: priceCents,
+        billing_cycle: data.billingCycle,
+        description: data.description,
+        branch_access: data.branchAccess,
+      })
+      .eq('id', data.id)
+
+    if (error) {
+      setToast(`Error updating plan: ${error.message}`)
+      return
+    }
+
+    setMembershipPlans((prev) =>
+      prev.map((p) =>
+        p.id === data.id
+          ? {
+              ...p,
+              name: data.name,
+              price_cents: priceCents,
+              billing_cycle: data.billingCycle,
+              description: data.description,
+              branch_access: data.branchAccess,
+            }
+          : p,
+      ),
+    )
+    setEditingPlan(null)
+    setToast(`Membership plan "${data.name}" updated successfully!`)
+  }
+
+  // Delete Membership Plan
+  async function handleDeletePlan(planId: string) {
+    if (!activeOrgId) return
+    const { error } = await supabase.from('membership_plans').delete().eq('id', planId)
+    if (error) {
+      setToast(`Could not delete plan: ${error.message}`)
+      return
+    }
+
+    setMembershipPlans((prev) => prev.filter((p) => p.id !== planId))
+    setEditingPlan(null)
+    setToast('Membership plan removed.')
   }
 
   // Add Branch
@@ -1047,6 +1110,7 @@ function App() {
               onNavigate={navigate}
               onToast={setToast}
               onOpenCreatePlan={() => setShowCreatePlan(true)}
+              onEditPlan={(plan) => setEditingPlan(plan)}
               onOpenAddBranch={() => setShowAddBranch(true)}
               onToggleBranch={handleToggleBranch}
               onOpenInviteTeam={() => setShowInviteTeam(true)}
@@ -1176,6 +1240,16 @@ function App() {
         <CreatePlanModal
           onClose={() => setShowCreatePlan(false)}
           onSubmit={handleCreatePlan}
+        />
+      )}
+
+      {/* Edit Membership Plan Modal */}
+      {editingPlan && (
+        <EditPlanModal
+          plan={editingPlan}
+          onClose={() => setEditingPlan(null)}
+          onSubmit={handleUpdatePlan}
+          onDelete={handleDeletePlan}
         />
       )}
 
@@ -1321,7 +1395,7 @@ function Dashboard({
                   <span>{money(Math.round(monthlyRevenue * 1.2))}</span>
                   <span>{money(Math.round(monthlyRevenue * 0.8))}</span>
                   <span>{money(Math.round(monthlyRevenue * 0.4))}</span>
-                  <span>$0</span>
+                  <span>ETB 0</span>
                 </div>
                 <svg className="revenue-chart" viewBox="0 0 640 190" preserveAspectRatio="none" role="img" aria-label="Revenue chart">
                   <defs><linearGradient id="chartFill" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stopColor="#8057ee" stopOpacity=".16" /><stop offset="100%" stopColor="#8057ee" stopOpacity="0" /></linearGradient></defs>
@@ -1543,6 +1617,7 @@ function ModulePage({
   onNavigate,
   onToast,
   onOpenCreatePlan,
+  onEditPlan,
   onOpenAddBranch,
   onToggleBranch,
   onOpenInviteTeam,
@@ -1564,6 +1639,7 @@ function ModulePage({
   onNavigate: (page: Page) => void
   onToast: (message: string) => void
   onOpenCreatePlan: () => void
+  onEditPlan: (plan: MembershipPlan) => void
   onOpenAddBranch: () => void
   onToggleBranch: (branchId: string, currentStatus: boolean) => void
   onOpenInviteTeam: () => void
@@ -1744,7 +1820,14 @@ function ModulePage({
               </div>
               <div className="plan-bottom">
                 <span><b>{members.filter((member) => member.plan === plan.name).length}</b> members enrolled</span>
-                <button className="row-menu" onClick={() => onToast('Plan details active.')}><Icon name="dots" size={18} /></button>
+                <button
+                  type="button"
+                  className="table-btn table-btn-primary"
+                  onClick={() => onEditPlan(plan)}
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '11px', padding: '5px 10px' }}
+                >
+                  ✎ Edit Plan
+                </button>
               </div>
             </div>
           ))}
@@ -1893,7 +1976,7 @@ function ModulePage({
                     <tr key={p.id}>
                       <td className="id-cell">{p.invoice_number || `INV-${p.id.slice(0, 6)}`}</td>
                       <td><strong>{p.member_name}</strong></td>
-                      <td><strong style={{ color: '#047857' }}>${(p.amount_cents / 100).toFixed(2)}</strong></td>
+                      <td><strong style={{ color: '#047857' }}>ETB {(p.amount_cents / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong></td>
                       <td><span className="badge-pill badge-role">{p.method.replace('_', ' ').toUpperCase()}</span></td>
                       <td>{new Date(p.paid_at).toLocaleDateString()}</td>
                       <td>

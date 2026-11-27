@@ -23,7 +23,7 @@ export default function RecordPaymentModal({
   }) => Promise<void>
 }) {
   const [selectedMemberId, setSelectedMemberId] = useState(members[0]?.id ?? '')
-  const [amount, setAmount] = useState('49.00')
+  const [amount, setAmount] = useState('1500')
   const [method, setMethod] = useState<'cash' | 'card' | 'bank_transfer' | 'mobile_money'>('cash')
   const [discountCode, setDiscountCode] = useState('')
   const [notes, setNotes] = useState('')
@@ -77,11 +77,11 @@ export default function RecordPaymentModal({
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
             <label>
-              Amount (USD)
+              Amount (Ethiopian Birr - ETB)
               <input
                 type="number"
-                step="0.01"
-                min="0.01"
+                step="1"
+                min="1"
                 value={amount}
                 onChange={(e) => setAmount(e.target.value)}
                 required

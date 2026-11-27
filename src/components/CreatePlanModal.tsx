@@ -14,7 +14,7 @@ export default function CreatePlanModal({
   }) => Promise<void>
 }) {
   const [name, setName] = useState('')
-  const [price, setPrice] = useState('69.00')
+  const [price, setPrice] = useState('1500')
   const [cycle, setCycle] = useState<'month' | 'year' | 'one_time'>('month')
   const [description, setDescription] = useState('Full gym access with premium amenities.')
   const [branchAccess, setBranchAccess] = useState<'all' | 'home_only'>('all')
@@ -44,7 +44,7 @@ export default function CreatePlanModal({
         <button className="modal-close" onClick={onClose} aria-label="Close dialog">✕</button>
         <div className="modal-icon">📋</div>
         <h2>Create membership tier</h2>
-        <p>Define a new membership offering for your community.</p>
+        <p>Define a new membership offering for your gym in Ethiopian Birr (ETB).</p>
 
         <form onSubmit={handleSubmit} className="modal-form">
           <label>
@@ -60,10 +60,10 @@ export default function CreatePlanModal({
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
             <label>
-              Price (USD)
+              Price (Ethiopian Birr - ETB)
               <input
                 type="number"
-                step="0.01"
+                step="1"
                 min="0"
                 value={price}
                 onChange={(e) => setPrice(e.target.value)}

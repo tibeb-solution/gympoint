@@ -251,7 +251,7 @@ export default function MemberProfileModal({
                         <strong style={{ color: '#1e293b' }}>Receipt #{p.invoice_number || p.id.slice(0, 8)}</strong>
                         <span style={{ color: '#64748b', marginLeft: '8px' }}>{new Date(p.paid_at).toLocaleDateString()} via {p.method}</span>
                       </div>
-                      <strong style={{ color: '#059669', fontSize: '12px' }}>${(p.amount_cents / 100).toFixed(2)}</strong>
+                      <strong style={{ color: '#059669', fontSize: '12px' }}>ETB {(p.amount_cents / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>
                     </div>
                   ))}
                 </div>

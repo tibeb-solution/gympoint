@@ -60,17 +60,17 @@ export default function ReceiptModal({
           <div style={{ borderTop: '1px solid #f1f5f9', borderBottom: '1px solid #f1f5f9', padding: '12px 0' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', padding: '4px 0' }}>
               <span style={{ color: '#334155' }}>{data.plan_name} Membership</span>
-              <strong style={{ color: '#0f172a' }}>${data.amount_dollars.toFixed(2)}</strong>
+              <strong style={{ color: '#0f172a' }}>ETB {data.amount_dollars.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>
             </div>
             {data.discount_amount ? (
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', padding: '4px 0', color: '#16a34a' }}>
                 <span>Promotional Discount</span>
-                <span>-${data.discount_amount.toFixed(2)}</span>
+                <span>-ETB {data.discount_amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
               </div>
             ) : null}
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '15px', fontWeight: 700, paddingTop: '8px', marginTop: '4px', borderTop: '1px dashed #e2e8f0' }}>
               <span style={{ color: '#0f172a' }}>Total Paid</span>
-              <span style={{ color: '#059669' }}>${data.amount_dollars.toFixed(2)}</span>
+              <span style={{ color: '#059669' }}>ETB {data.amount_dollars.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
             </div>
           </div>
 

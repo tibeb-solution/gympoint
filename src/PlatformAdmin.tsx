@@ -296,9 +296,9 @@ export default function PlatformAdmin({
           .single()
 
         await supabase.from('membership_plans').insert([
-          { organization_id: directOrg.id, name: 'Unlimited annual', price_cents: 99000, billing_cycle: 'year', description: 'Full access to all amenities.' },
-          { organization_id: directOrg.id, name: 'Premium monthly', price_cents: 8900, billing_cycle: 'month', description: 'Flexible recurring monthly access.' },
-          { organization_id: directOrg.id, name: 'Starter monthly', price_cents: 4900, billing_cycle: 'month', description: 'Essential access for off-peak hours.' },
+          { organization_id: directOrg.id, name: 'Unlimited annual', price_cents: 1800000, billing_cycle: 'year', description: 'Full access to all amenities.', branch_access: 'all' },
+          { organization_id: directOrg.id, name: 'Premium monthly', price_cents: 180000, billing_cycle: 'month', description: 'Flexible recurring monthly access.', branch_access: 'all' },
+          { organization_id: directOrg.id, name: 'Starter monthly', price_cents: 120000, billing_cycle: 'month', description: 'Essential access for off-peak hours.', branch_access: 'home_only' },
         ])
 
         const isolatedAuthClient = createClient(
