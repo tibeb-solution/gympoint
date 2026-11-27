@@ -1,4 +1,3 @@
-
 export type ReceiptData = {
   id: string
   invoice_number: string
@@ -22,6 +21,64 @@ export default function ReceiptModal({
   data: ReceiptData
   onClose: () => void
 }) {
+  const handlePrint = () => {
+    const printable = document.getElementById('printable-receipt')
+    if (!printable) {
+      window.print()
+      return
+    }
+
+    // Create a hidden print iframe or dedicated popup window for guaranteed clean printing
+    const printWindow = window.open('', '_blank', 'width=650,height=750')
+    if (printWindow) {
+      printWindow.document.write(`
+        <!DOCTYPE html>
+        <html>
+          <head>
+            <meta charset="utf-8" />
+            <title>Receipt #${data.invoice_number} - ${data.org_name}</title>
+            <style>
+              @page { size: auto; margin: 15mm; }
+              body {
+                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+                color: #0f172a;
+                background: #fff;
+                margin: 0;
+                padding: 20px;
+                -webkit-print-color-adjust: exact;
+                print-color-adjust: exact;
+              }
+              * { box-sizing: border-box; }
+              .receipt-box {
+                max-width: 500px;
+                margin: 0 auto;
+                border: 1px solid #e2e8f0;
+                border-radius: 8px;
+                padding: 24px;
+              }
+            </style>
+          </head>
+          <body>
+            <div class="receipt-box">
+              ${printable.innerHTML}
+            </div>
+            <script>
+              window.onload = function() {
+                window.focus();
+                window.print();
+                setTimeout(function() { window.close(); }, 750);
+              };
+            </script>
+          </body>
+        </html>
+      `)
+      printWindow.document.close()
+    } else {
+      // Fallback if popups blocked
+      window.print()
+    }
+  }
+
   return (
     <div className="modal-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose() }}>
       <div className="modal receipt-modal" role="dialog" aria-modal="true" style={{ width: 'min(100%, 480px)', background: '#fff', padding: '28px' }}>
@@ -84,7 +141,7 @@ export default function ReceiptModal({
           <button
             type="button"
             className="button button-primary"
-            onClick={() => window.print()}
+            onClick={handlePrint}
             style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
           >
             <span>🖨️</span> Print / Save PDF

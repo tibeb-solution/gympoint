@@ -31,6 +31,7 @@ export default function MemberProfileModal({
   onClose,
   onStatusChange,
   onToast,
+  onViewReceipt,
 }: {
   member: MemberDetail
   checkIns: { id: string; time: string; branch: string; status: string }[]
@@ -39,6 +40,7 @@ export default function MemberProfileModal({
   onClose: () => void
   onStatusChange: (memberId: string, newStatus: MemberDetail['status'], reason?: string) => Promise<void>
   onToast: (msg: string) => void
+  onViewReceipt?: (payment: { id: string; amount_cents: number; method: string; paid_at: string; invoice_number?: string; member_name: string; member_code?: string }) => void
 }) {
   const [tab, setTab] = useState<TabKey>('overview')
   const [freezeReason, setFreezeReason] = useState('Medical condition / injury')
@@ -251,7 +253,23 @@ export default function MemberProfileModal({
                         <strong style={{ color: '#1e293b' }}>Receipt #{p.invoice_number || p.id.slice(0, 8)}</strong>
                         <span style={{ color: '#64748b', marginLeft: '8px' }}>{new Date(p.paid_at).toLocaleDateString()} via {p.method}</span>
                       </div>
-                      <strong style={{ color: '#059669', fontSize: '12px' }}>ETB {(p.amount_cents / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                        <strong style={{ color: '#059669', fontSize: '12px' }}>ETB {(p.amount_cents / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>
+                        {onViewReceipt && (
+                          <button
+                            type="button"
+                            className="table-btn table-btn-primary"
+                            style={{ padding: '3px 8px', fontSize: '10px' }}
+                            onClick={() => onViewReceipt({
+                              ...p,
+                              member_name: member.name,
+                              member_code: member.member_code,
+                            })}
+                          >
+                            Print Receipt
+                          </button>
+                        )}
+                      </div>
                     </div>
                   ))}
                 </div>

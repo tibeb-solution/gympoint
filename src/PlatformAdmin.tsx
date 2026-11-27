@@ -70,13 +70,17 @@ function AdminIcon({
 export default function PlatformAdmin({
   email,
   fullName,
+  avatarUrl,
   onLogout,
   onOpenWorkspace,
+  onOpenEditProfile,
 }: {
   email: string
   fullName: string
+  avatarUrl?: string | null
   onLogout: () => void
   onOpenWorkspace: (orgId?: string) => void
+  onOpenEditProfile?: () => void
 }) {
   const [companies, setCompanies] = useState<Company[]>([])
   const [plans, setPlans] = useState<PlatformPlan[]>(defaultPlans)
@@ -412,9 +416,24 @@ export default function PlatformAdmin({
         </nav>
         <div className="platform-sidebar-bottom">
           <div className="platform-provider"><span>GYMPOINT PLATFORM</span><b>Built for better gym management</b></div>
-          <div className="platform-account">
-            <div className="platform-user-avatar">{initials}</div>
-            <div title={email}><strong>{displayName}</strong><span>Super administrator</span><small>{email}</small></div>
+          <div
+            className="platform-account"
+            style={{ cursor: onOpenEditProfile ? 'pointer' : 'default' }}
+            onClick={onOpenEditProfile}
+            title={onOpenEditProfile ? 'Click to edit profile picture and name' : undefined}
+          >
+            <div className="platform-user-avatar" style={avatarUrl ? { overflow: 'hidden', padding: 0 } : undefined}>
+              {avatarUrl ? (
+                <img src={avatarUrl} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '50%' }} />
+              ) : (
+                initials
+              )}
+            </div>
+            <div title={email}>
+              <strong>{displayName}</strong>
+              <span>Super administrator</span>
+              <small>{email}</small>
+            </div>
           </div>
         </div>
       </aside>

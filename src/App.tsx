@@ -12,6 +12,7 @@ import BranchModal from './components/BranchModal'
 import InviteTeamModal from './components/InviteTeamModal'
 import GuestCheckInModal from './components/GuestCheckInModal'
 import QRScannerModal from './components/QRScannerModal'
+import EditProfileModal from './components/EditProfileModal'
 
 type MemberStatus = 'Active' | 'Pending' | 'Frozen' | 'Expired' | 'Cancelled'
 type Page = 'Overview' | 'Members' | 'Memberships' | 'Check-in' | 'Branches' | 'Team' | 'Billing' | 'Reports' | 'Settings'
@@ -23,6 +24,7 @@ type Profile = {
   role: UserRole
   organization_id?: string | null
   branch_id?: string | null
+  avatar_url?: string | null
 }
 type Organization = {
   id: string
@@ -186,6 +188,7 @@ function App() {
   const [showInviteTeam, setShowInviteTeam] = useState(false)
   const [showGuestCheckIn, setShowGuestCheckIn] = useState(false)
   const [showQRScanner, setShowQRScanner] = useState(false)
+  const [showEditProfile, setShowEditProfile] = useState(false)
 
   useEffect(() => {
     void supabase.auth.getSession().then(({ data }) => {
@@ -214,11 +217,23 @@ function App() {
     async function loadProfile() {
       let { data, error } = await supabase
         .from('profiles')
-        .select('id, email, full_name, role, organization_id, branch_id')
+        .select('id, email, full_name, role, organization_id, branch_id, avatar_url')
         .eq('id', session!.user.id)
         .maybeSingle()
 
       if (cancelled) return
+
+      // Fallback if avatar_url column has not been added via SQL yet
+      if (!data && error && error.message.includes('avatar_url')) {
+        const retry = await supabase
+          .from('profiles')
+          .select('id, email, full_name, role, organization_id, branch_id')
+          .eq('id', session!.user.id)
+          .maybeSingle()
+        if (retry.data) {
+          data = retry.data as any
+        }
+      }
 
       // If no profile exists yet, create one seamlessly
       if (!data) {
@@ -236,7 +251,7 @@ function App() {
           .single()
 
         if (!upsertErr && newProfile) {
-          data = newProfile
+          data = newProfile as any
         }
       }
 
@@ -885,6 +900,25 @@ function App() {
     setToast('Organization settings saved.')
   }
 
+  async function handleUpdateProfile(data: { full_name: string; avatar_url: string | null }) {
+    if (!session?.user) return
+    const { error } = await supabase
+      .from('profiles')
+      .update({
+        full_name: data.full_name,
+        avatar_url: data.avatar_url,
+      })
+      .eq('id', session.user.id)
+
+    if (error) {
+      setToast('Failed to update profile: ' + error.message)
+      throw error
+    }
+
+    setProfile((prev) => prev ? { ...prev, full_name: data.full_name, avatar_url: data.avatar_url } : null)
+    setToast('Profile updated successfully!')
+  }
+
   function navigate(nextPage: Page) {
     setPage(nextPage)
     setMobileNav(false)
@@ -909,7 +943,9 @@ function App() {
       <PlatformAdmin
         email={profile?.email || session.user.email || 'aman@gmail.com'}
         fullName={profile?.full_name || 'Aman'}
+        avatarUrl={profile?.avatar_url}
         onLogout={() => void signOut()}
+        onOpenEditProfile={() => setShowEditProfile(true)}
         onOpenWorkspace={(orgId) => {
           if (orgId) setActiveOrgId(orgId)
           setAdminView(false)
@@ -1003,8 +1039,14 @@ function App() {
         <div className="sidebar-bottom">
           <div className="help-card"><div className="help-icon">?</div><strong>Need a hand?</strong><span>Visit our help center</span><button onClick={() => setToast('Help center will be available soon.')}>Get support <span>↗</span></button></div>
           <div className="platform-label"><span className="platform-dot" /> Powered by <b>gympoint</b></div>
-          <button className="profile-button" onClick={() => isPlatformAdmin ? setAdminView(true) : navigate('Settings')}>
-            <div className="avatar avatar-purple">{getInitials(displayName)}</div>
+          <button className="profile-button" onClick={() => setShowEditProfile(true)} title="Click to edit profile">
+            <div className="avatar avatar-purple" style={profile?.avatar_url ? { overflow: 'hidden', padding: 0 } : undefined}>
+              {profile?.avatar_url ? (
+                <img src={profile.avatar_url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '50%' }} />
+              ) : (
+                getInitials(displayName)
+              )}
+            </div>
             <div className="profile-copy">
               <strong>{displayName}</strong>
               <span>{isPlatformAdmin ? 'Platform super-admin' : 'Organization admin'}</span>
@@ -1059,7 +1101,19 @@ function App() {
             <label className="global-search"><Icon name="search" size={18} /><input placeholder="Search anything..." value={query} onChange={(event) => { setQuery(event.target.value); if (event.target.value) setPage('Members') }} /><kbd>⌘ K</kbd></label>
             <button className="icon-button notification-button" aria-label="Notifications" onClick={() => setToast('You’re all caught up!')}><Icon name="bell" size={19} /><i /></button>
             <div className="top-divider" />
-            <button className="top-avatar" aria-label="Your profile" onClick={() => navigate('Settings')}>{getInitials(displayName)}</button>
+            <button
+              className="top-avatar"
+              aria-label="Your profile"
+              onClick={() => setShowEditProfile(true)}
+              title="Click to edit profile"
+              style={profile?.avatar_url ? { overflow: 'hidden', padding: 0 } : undefined}
+            >
+              {profile?.avatar_url ? (
+                <img src={profile.avatar_url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '50%' }} />
+              ) : (
+                getInitials(displayName)
+              )}
+            </button>
           </div>
         </header>
 
@@ -1097,6 +1151,8 @@ function App() {
           ) : (
             <ModulePage
               page={page}
+              profile={profile}
+              onUpdateProfile={handleUpdateProfile}
               organization={organization}
               branches={branches}
               plans={membershipPlans}
@@ -1215,6 +1271,21 @@ function App() {
           onClose={() => setSelectedMemberProfile(null)}
           onStatusChange={handleMemberStatusChange}
           onToast={setToast}
+          onViewReceipt={(payment) => {
+            setSelectedReceipt({
+              id: payment.id,
+              invoice_number: payment.invoice_number || `INV-${payment.id.slice(0, 6)}`,
+              org_name: organization?.name ?? 'GymPoint Fitness',
+              org_phone: organization?.phone,
+              org_email: organization?.contact_email,
+              member_name: payment.member_name,
+              member_code: payment.member_code,
+              plan_name: 'Membership Dues',
+              amount_dollars: payment.amount_cents / 100,
+              method: payment.method.replace('_', ' ').toUpperCase(),
+              paid_at: payment.paid_at,
+            })
+          }}
         />
       )}
 
@@ -1223,6 +1294,15 @@ function App() {
         <ReceiptModal
           data={selectedReceipt}
           onClose={() => setSelectedReceipt(null)}
+        />
+      )}
+
+      {/* Edit User Profile Modal */}
+      {showEditProfile && profile && (
+        <EditProfileModal
+          profile={profile}
+          onClose={() => setShowEditProfile(false)}
+          onSave={handleUpdateProfile}
         />
       )}
 
@@ -1604,6 +1684,8 @@ function CheckInPage({
 
 function ModulePage({
   page,
+  profile,
+  onUpdateProfile,
   organization,
   branches,
   plans,
@@ -1626,6 +1708,8 @@ function ModulePage({
   onApproveRequest,
 }: {
   page: Page
+  profile: Profile | null
+  onUpdateProfile: (data: { full_name: string; avatar_url: string | null }) => Promise<void>
   organization: Organization | null
   branches: Branch[]
   plans: MembershipPlan[]
@@ -1653,6 +1737,45 @@ function ModulePage({
   const [location, setLocation] = useState(organization?.primary_location ?? '')
   const [logoUrl, setLogoUrl] = useState<string | null>(organization?.logo_url ?? null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+
+  // Personal user profile state
+  const [profileName, setProfileName] = useState(profile?.full_name ?? '')
+  const [profileAvatarUrl, setProfileAvatarUrl] = useState<string | null>(profile?.avatar_url ?? null)
+  const [profileSaving, setProfileSaving] = useState(false)
+  const profileFileInputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    if (profile) {
+      setProfileName(profile.full_name || '')
+      setProfileAvatarUrl(profile.avatar_url || null)
+    }
+  }, [profile])
+
+  const handleProfileAvatarChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    if (file.size > 5 * 1024 * 1024) {
+      onToast('Profile photo size must be under 5MB.')
+      return
+    }
+    const reader = new FileReader()
+    reader.onload = async (event) => {
+      const result = event.target?.result as string
+      setProfileAvatarUrl(result)
+      await onUpdateProfile({ full_name: profileName || profile?.full_name || '', avatar_url: result })
+    }
+    reader.readAsDataURL(file)
+  }
+
+  const handleSaveProfile = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setProfileSaving(true)
+    try {
+      await onUpdateProfile({ full_name: profileName.trim(), avatar_url: profileAvatarUrl })
+    } finally {
+      setProfileSaving(false)
+    }
+  }
 
   useEffect(() => {
     setOrgName(organization?.name ?? '')
@@ -1995,40 +2118,102 @@ function ModulePage({
 
       {/* Settings View */}
       {page === 'Settings' && (
-        <div className="panel settings-panel">
-          <div className="settings-title">
-            <div className="org-avatar large-org-avatar" style={logoUrl ? { overflow: 'hidden', padding: 0 } : undefined}>
-              {logoUrl ? (
-                <img src={logoUrl} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-              ) : (
-                (orgName || 'G').slice(0, 1).toUpperCase()
+        <>
+          <div className="panel settings-panel">
+            <div className="settings-title">
+              <div className="org-avatar large-org-avatar" style={logoUrl ? { overflow: 'hidden', padding: 0 } : undefined}>
+                {logoUrl ? (
+                  <img src={logoUrl} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                ) : (
+                  (orgName || 'G').slice(0, 1).toUpperCase()
+                )}
+              </div>
+              <div><h2>{orgName || 'Organization'}</h2><p>Organization workspace <span className="verified-tag">Active</span></p></div>
+              <input
+                type="file"
+                ref={fileInputRef}
+                accept="image/*"
+                style={{ display: 'none' }}
+                onChange={handleFileChange}
+              />
+              <button className="button button-outline" onClick={() => fileInputRef.current?.click()}>
+                {logoUrl ? 'Change logo' : 'Upload logo'}
+              </button>
+              {logoUrl && (
+                <button className="button button-outline" style={{ marginLeft: 8 }} onClick={handleRemoveLogo}>
+                  Remove
+                </button>
               )}
             </div>
-            <div><h2>{orgName || 'Organization'}</h2><p>Organization workspace <span className="verified-tag">Active</span></p></div>
-            <input
-              type="file"
-              ref={fileInputRef}
-              accept="image/*"
-              style={{ display: 'none' }}
-              onChange={handleFileChange}
-            />
-            <button className="button button-outline" onClick={() => fileInputRef.current?.click()}>
-              {logoUrl ? 'Change logo' : 'Upload logo'}
-            </button>
-            {logoUrl && (
-              <button className="button button-outline" style={{ marginLeft: 8 }} onClick={handleRemoveLogo}>
-                Remove
+            <div className="settings-fields">
+              <label>Organization name<input value={orgName} onChange={(e) => setOrgName(e.target.value)} /></label>
+              <label>Contact email<input value={contactEmail} onChange={(e) => setContactEmail(e.target.value)} /></label>
+              <label>Phone number<input value={phone} onChange={(e) => setPhone(e.target.value)} /></label>
+              <label>Primary location<input value={location} onChange={(e) => setLocation(e.target.value)} /></label>
+            </div>
+            <div className="settings-brand-note"><span className="platform-dot" /> Your workspace is powered by <b>GymPoint</b>. Platform branding remains visible.</div>
+          </div>
+
+          {/* User Personal Profile Card */}
+          <div className="panel settings-panel" style={{ marginTop: '16px' }}>
+            <div className="settings-title">
+              <div
+                className="org-avatar large-org-avatar"
+                style={{
+                  borderRadius: '50%',
+                  background: '#ede7ff',
+                  color: '#7653e8',
+                  overflow: 'hidden',
+                  padding: 0,
+                  border: '2px solid #ddd6fe',
+                }}
+              >
+                {profileAvatarUrl ? (
+                  <img src={profileAvatarUrl} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                ) : (
+                  getInitials(profileName || profile?.email || 'U')
+                )}
+              </div>
+              <div>
+                <h2>Personal Profile &amp; Picture</h2>
+                <p>Your account across GymPoint <span className="verified-tag" style={{ textTransform: 'capitalize' }}>{profile?.role?.replace('_', ' ') || 'Staff'}</span></p>
+              </div>
+              <input
+                type="file"
+                ref={profileFileInputRef}
+                accept="image/*"
+                style={{ display: 'none' }}
+                onChange={handleProfileAvatarChange}
+              />
+              <button className="button button-outline" onClick={() => profileFileInputRef.current?.click()}>
+                {profileAvatarUrl ? 'Change picture' : 'Upload picture'}
               </button>
-            )}
+              {profileAvatarUrl && (
+                <button
+                  className="button button-outline"
+                  style={{ marginLeft: 8, color: '#dc2626', borderColor: '#fecaca' }}
+                  onClick={async () => {
+                    setProfileAvatarUrl(null)
+                    await onUpdateProfile({ full_name: profileName, avatar_url: null })
+                  }}
+                >
+                  Remove
+                </button>
+              )}
+            </div>
+            <form onSubmit={handleSaveProfile} style={{ display: 'grid', gap: '14px', marginTop: '16px' }}>
+              <div className="settings-fields" style={{ padding: 0 }}>
+                <label>Full Name<input value={profileName} onChange={(e) => setProfileName(e.target.value)} placeholder="Your full name" /></label>
+                <label>Email Address<input value={profile?.email || ''} disabled style={{ background: '#f8fafc', color: '#64748b', cursor: 'not-allowed' }} /></label>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                <button type="submit" className="button button-primary" disabled={profileSaving}>
+                  {profileSaving ? 'Saving...' : 'Save Profile'}
+                </button>
+              </div>
+            </form>
           </div>
-          <div className="settings-fields">
-            <label>Organization name<input value={orgName} onChange={(e) => setOrgName(e.target.value)} /></label>
-            <label>Contact email<input value={contactEmail} onChange={(e) => setContactEmail(e.target.value)} /></label>
-            <label>Phone number<input value={phone} onChange={(e) => setPhone(e.target.value)} /></label>
-            <label>Primary location<input value={location} onChange={(e) => setLocation(e.target.value)} /></label>
-          </div>
-          <div className="settings-brand-note"><span className="platform-dot" /> Your workspace is powered by <b>GymPoint</b>. Platform branding remains visible.</div>
-        </div>
+        </>
       )}
 
       {/* Reports View */}

@@ -379,3 +379,9 @@ select id, email, coalesce(raw_user_meta_data ->> 'full_name', 'Aman'), 'platfor
 from auth.users
 where lower(email) = 'aman@gmail.com'
 on conflict (id) do update set role = 'platform_admin', email = excluded.email;
+
+
+-- ==============================================================================
+-- PROFILE AVATAR MIGRATION
+-- ==============================================================================
+alter table public.profiles add column if not exists avatar_url text;
