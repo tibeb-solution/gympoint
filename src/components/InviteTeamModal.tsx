@@ -23,12 +23,14 @@ export default function InviteTeamModal({
     email: string
     role: string
     branchId?: string
+    tempPassword?: string
   }) => Promise<void>
 }) {
   const [fullName, setFullName] = useState('')
   const [email, setEmail] = useState('')
   const [role, setRole] = useState('receptionist')
   const [branchId, setBranchId] = useState(branches[0]?.id ?? '')
+  const [tempPassword, setTempPassword] = useState('GymPoint2026!')
   const [saving, setSaving] = useState(false)
 
   async function handleSubmit(e: React.FormEvent) {
@@ -41,6 +43,7 @@ export default function InviteTeamModal({
       email: email.trim(),
       role,
       branchId: branchId || undefined,
+      tempPassword: tempPassword.trim(),
     })
     setSaving(false)
     onClose()
@@ -78,32 +81,48 @@ export default function InviteTeamModal({
           </label>
 
           <label>
-            Assigned role
-            <select value={role} onChange={(e) => setRole(e.target.value)}>
-              {STAFF_ROLES.map((r) => (
-                <option key={r.value} value={r.value}>
-                  {r.label} — {r.desc}
-                </option>
-              ))}
-            </select>
+            Temporary password
+            <input
+              type="text"
+              minLength={6}
+              value={tempPassword}
+              onChange={(e) => setTempPassword(e.target.value)}
+              required
+            />
+            <span style={{ fontSize: '10px', color: '#64748b' }}>
+              Staff member will be prompted to change this password on their first login.
+            </span>
           </label>
 
-          <label>
-            Assigned branch
-            <select value={branchId} onChange={(e) => setBranchId(e.target.value)}>
-              <option value="">All branches (Multi-branch access)</option>
-              {branches.map((b) => (
-                <option key={b.id} value={b.id}>
-                  {b.name}
-                </option>
-              ))}
-            </select>
-          </label>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+            <label>
+              Assigned role
+              <select value={role} onChange={(e) => setRole(e.target.value)}>
+                {STAFF_ROLES.map((r) => (
+                  <option key={r.value} value={r.value}>
+                    {r.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label>
+              Assigned branch
+              <select value={branchId} onChange={(e) => setBranchId(e.target.value)}>
+                <option value="">All branches</option>
+                {branches.map((b) => (
+                  <option key={b.id} value={b.id}>
+                    {b.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
 
           <div className="modal-actions">
             <button type="button" className="button button-outline" onClick={onClose}>Cancel</button>
             <button type="submit" className="button button-primary" disabled={saving || !fullName.trim() || !email.trim()}>
-              {saving ? 'Inviting...' : 'Send Invitation'}
+              {saving ? 'Inviting...' : 'Add Team Member'}
             </button>
           </div>
         </form>

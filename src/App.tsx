@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import type { Session } from '@supabase/supabase-js'
+import { createClient, type Session } from '@supabase/supabase-js'
 import Auth from './Auth'
 import PlatformAdmin from './PlatformAdmin'
 import { supabase } from './lib/supabase'
@@ -10,6 +10,8 @@ import CreatePlanModal from './components/CreatePlanModal'
 import EditPlanModal from './components/EditPlanModal'
 import BranchModal from './components/BranchModal'
 import InviteTeamModal from './components/InviteTeamModal'
+import EditTeamModal from './components/EditTeamModal'
+import ForceChangePasswordModal from './components/ForceChangePasswordModal'
 import GuestCheckInModal from './components/GuestCheckInModal'
 import QRScannerModal from './components/QRScannerModal'
 import EditProfileModal from './components/EditProfileModal'
@@ -26,6 +28,9 @@ type Profile = {
   organization_id?: string | null
   branch_id?: string | null
   avatar_url?: string | null
+  status?: 'Active' | 'Paused' | 'Suspended' | null
+  must_change_password?: boolean | null
+  job_title?: string | null
 }
 type Organization = {
   id: string
@@ -97,8 +102,9 @@ type TeamMember = {
   email: string
   full_name: string
   role: string
+  branch_id?: string
   branch_name?: string
-  status: 'Active' | 'Pending'
+  status: 'Active' | 'Paused' | 'Suspended' | 'Pending'
 }
 type ApprovalRequest = {
   id: string
@@ -187,6 +193,7 @@ function App() {
   const [editingPlan, setEditingPlan] = useState<MembershipPlan | null>(null)
   const [showAddBranch, setShowAddBranch] = useState(false)
   const [showInviteTeam, setShowInviteTeam] = useState(false)
+  const [editingTeamMember, setEditingTeamMember] = useState<TeamMember | null>(null)
   const [showGuestCheckIn, setShowGuestCheckIn] = useState(false)
   const [showQRScanner, setShowQRScanner] = useState(false)
   const [showEditProfile, setShowEditProfile] = useState(false)
@@ -218,17 +225,17 @@ function App() {
     async function loadProfile() {
       let { data, error } = await supabase
         .from('profiles')
-        .select('id, email, full_name, role, organization_id, branch_id, avatar_url')
+        .select('id, email, full_name, role, organization_id, branch_id, avatar_url, status, must_change_password, job_title')
         .eq('id', session!.user.id)
         .maybeSingle()
 
       if (cancelled) return
 
-      // Fallback if avatar_url column has not been added via SQL yet
-      if (!data && error && error.message.includes('avatar_url')) {
+      // Fallback if some new columns have not been added via SQL yet
+      if (!data && error) {
         const retry = await supabase
           .from('profiles')
-          .select('id, email, full_name, role, organization_id, branch_id')
+          .select('id, email, full_name, role, organization_id, branch_id, avatar_url')
           .eq('id', session!.user.id)
           .maybeSingle()
         if (retry.data) {
@@ -262,6 +269,9 @@ function App() {
       }
 
       const loaded = data as Profile
+      if (session?.user?.user_metadata?.must_change_password !== undefined) {
+        loaded.must_change_password = session.user.user_metadata.must_change_password
+      }
       if (session?.user?.email?.toLowerCase() === 'aman@gmail.com') {
         loaded.role = 'platform_admin'
       }
@@ -384,12 +394,37 @@ function App() {
         }
       } catch {}
 
-      // Default staff members
-      setTeamMembers([
-        { id: 't1', email: profile?.email || 'admin@gym.com', full_name: profile?.full_name || 'Organization Admin', role: 'Organization Administrator', branch_name: 'All branches', status: 'Active' },
-        { id: 't2', email: 'trainer.marcus@gym.com', full_name: 'Marcus Vance', role: 'Personal Trainer', branch_name: loadedBranches[0]?.name || 'Main Downtown', status: 'Active' },
-        { id: 't3', email: 'desk.olivia@gym.com', full_name: 'Olivia Chen', role: 'Front Desk Receptionist', branch_name: loadedBranches[0]?.name || 'Main Downtown', status: 'Active' },
-      ])
+      // Load staff & instructors for this organization
+      try {
+        const { data: teamData } = await supabase
+          .from('profiles')
+          .select('id, email, full_name, role, status, job_title, branch_id, branches(name)')
+          .eq('organization_id', orgId)
+
+        if (teamData && teamData.length > 0) {
+          setTeamMembers(teamData.map((t: any) => ({
+            id: t.id,
+            email: t.email,
+            full_name: t.full_name || t.email.split('@')[0],
+            role: t.job_title || t.role.replace('_', ' ').replace(/\b\w/g, (c: string) => c.toUpperCase()),
+            branch_id: t.branch_id,
+            branch_name: t.branches?.name || 'All branches',
+            status: t.status || 'Active',
+          })))
+        } else {
+          setTeamMembers([
+            { id: profile?.id || 't1', email: profile?.email || 'admin@gym.com', full_name: profile?.full_name || 'Organization Admin', role: 'Organization Administrator', branch_name: 'All branches', status: 'Active' },
+            { id: 't2', email: 'trainer.marcus@gym.com', full_name: 'Marcus Vance', role: 'Personal Trainer', branch_name: loadedBranches[0]?.name || 'Main Downtown', status: 'Active' },
+            { id: 't3', email: 'desk.olivia@gym.com', full_name: 'Olivia Chen', role: 'Front Desk Receptionist', branch_name: loadedBranches[0]?.name || 'Main Downtown', status: 'Active' },
+          ])
+        }
+      } catch {
+        setTeamMembers([
+          { id: profile?.id || 't1', email: profile?.email || 'admin@gym.com', full_name: profile?.full_name || 'Organization Admin', role: 'Organization Administrator', branch_name: 'All branches', status: 'Active' },
+          { id: 't2', email: 'trainer.marcus@gym.com', full_name: 'Marcus Vance', role: 'Personal Trainer', branch_name: loadedBranches[0]?.name || 'Main Downtown', status: 'Active' },
+          { id: 't3', email: 'desk.olivia@gym.com', full_name: 'Olivia Chen', role: 'Front Desk Receptionist', branch_name: loadedBranches[0]?.name || 'Main Downtown', status: 'Active' },
+        ])
+      }
     }
 
     void loadWorkspace(activeOrgId)
@@ -730,20 +765,102 @@ function App() {
     setToast(`Branch status set to ${updatedStatus ? 'Open' : 'Temporarily Closed'}.`)
   }
 
-  // Invite Team Member
-  async function handleInviteTeam(data: { fullName: string; email: string; role: string; branchId?: string }) {
+  // Invite Team Member with Temporary Password
+  async function handleInviteTeam(data: { fullName: string; email: string; role: string; branchId?: string; tempPassword?: string }) {
     const branchName = branches.find((b) => b.id === data.branchId)?.name ?? 'All branches'
+    const pwd = data.tempPassword || 'GymPoint2026!'
+    let createdId = `team-${Date.now()}`
+
+    try {
+      const isolatedAuth = createClient(
+        import.meta.env.VITE_SUPABASE_URL,
+        import.meta.env.VITE_SUPABASE_ANON_KEY,
+        { auth: { persistSession: false, autoRefreshToken: false } }
+      )
+      const { data: authData } = await isolatedAuth.auth.signUp({
+        email: data.email,
+        password: pwd,
+        options: {
+          data: {
+            full_name: data.fullName,
+            organization_id: activeOrgId,
+            role: data.role === 'org_admin' ? 'org_admin' : 'staff',
+            job_title: data.role,
+            must_change_password: true,
+          },
+        },
+      })
+      if (authData.user) {
+        createdId = authData.user.id
+        await supabase.from('profiles').upsert({
+          id: authData.user.id,
+          email: data.email,
+          full_name: data.fullName,
+          role: data.role === 'org_admin' ? 'org_admin' : 'staff',
+          job_title: data.role.replace('_', ' ').replace(/\b\w/g, (c) => c.toUpperCase()),
+          organization_id: activeOrgId,
+          branch_id: data.branchId || null,
+          status: 'Active',
+          must_change_password: true,
+        })
+      }
+    } catch {}
+
     const newTeam: TeamMember = {
-      id: `team-${Date.now()}`,
+      id: createdId,
       email: data.email,
       full_name: data.fullName,
       role: data.role.replace('_', ' ').replace(/\b\w/g, (c) => c.toUpperCase()),
+      branch_id: data.branchId,
       branch_name: branchName,
       status: 'Active',
     }
     setTeamMembers((prev) => [...prev, newTeam])
     setShowInviteTeam(false)
-    setToast(`Invitation sent to ${data.email} with role ${newTeam.role}!`)
+    setToast(`Added ${data.fullName} to team! Temp password set (${pwd}).`)
+  }
+
+  // Edit Team Member
+  async function handleSaveTeamMember(data: { id: string; full_name: string; role: string; branch_id?: string; status: 'Active' | 'Paused' | 'Suspended' }) {
+    const branchName = branches.find((b) => b.id === data.branch_id)?.name ?? 'All branches'
+    try {
+      await supabase.from('profiles').update({
+        full_name: data.full_name,
+        job_title: data.role,
+        branch_id: data.branch_id || null,
+        status: data.status,
+      }).eq('id', data.id)
+    } catch {}
+
+    setTeamMembers((prev) => prev.map((t) => t.id === data.id ? {
+      ...t,
+      full_name: data.full_name,
+      role: data.role,
+      branch_id: data.branch_id,
+      branch_name: branchName,
+      status: data.status,
+    } : t))
+    setToast(`Team member ${data.full_name} updated successfully!`)
+  }
+
+  // Pause / Resume Team Member Access
+  async function handleToggleTeamStatus(memberId: string, currentStatus: string) {
+    const nextStatus = currentStatus === 'Active' ? 'Suspended' : 'Active'
+    try {
+      await supabase.from('profiles').update({ status: nextStatus }).eq('id', memberId)
+    } catch {}
+    setTeamMembers((prev) => prev.map((t) => t.id === memberId ? { ...t, status: nextStatus as any } : t))
+    setToast(`Staff member access set to ${nextStatus}.`)
+  }
+
+  // Remove Team Member
+  async function handleDeleteTeamMember(memberId: string, name: string) {
+    if (!window.confirm(`Are you sure you want to remove ${name} from your team?`)) return
+    try {
+      await supabase.from('profiles').update({ organization_id: null, branch_id: null }).eq('id', memberId)
+    } catch {}
+    setTeamMembers((prev) => prev.filter((t) => t.id !== memberId))
+    setToast(`Removed ${name} from team.`)
   }
 
   // Guest Pass Check-in
@@ -920,6 +1037,22 @@ function App() {
     setToast('Profile updated successfully!')
   }
 
+  async function handlePasswordChanged(newPassword: string) {
+    if (!session?.user) return
+    const { error } = await supabase.auth.updateUser({
+      password: newPassword,
+      data: { must_change_password: false },
+    })
+    if (error) throw error
+
+    try {
+      await supabase.from('profiles').update({ must_change_password: false }).eq('id', session.user.id)
+    } catch {}
+
+    setProfile((prev) => (prev ? { ...prev, must_change_password: false } : null))
+    setToast('Permanent password set successfully! Welcome to your workspace.')
+  }
+
   function navigate(nextPage: Page) {
     setPage(nextPage)
     setMobileNav(false)
@@ -939,6 +1072,51 @@ function App() {
 
   if (!authReady) return null
   if (!session) return <Auth />
+
+  // Force user to change temporary password before accessing workspace
+  if (profile?.must_change_password) {
+    return (
+      <ForceChangePasswordModal
+        userEmail={profile.email || session.user.email || ''}
+        onPasswordChanged={handlePasswordChanged}
+        onSignOut={() => void signOut()}
+      />
+    )
+  }
+
+  // Check if staff user account has been paused or suspended by the gym
+  if (!isPlatformAdmin && (profile?.status === 'Suspended' || profile?.status === 'Paused')) {
+    return (
+      <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', background: '#0e1017', color: '#fff', padding: '24px', fontFamily: "'DM Sans', sans-serif" }}>
+        <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', maxWidth: 860, margin: '0 auto', width: '100%', padding: '16px 0' }}>
+          <div className="brand-lockup" style={{ padding: 0 }}>
+            <div className="brand-mark"><img src="/gympoint-icon.png" alt="GymPoint" /></div>
+            <div><strong>gympoint</strong><small>MANAGEMENT PLATFORM</small></div>
+          </div>
+          <button className="button button-outline" onClick={() => void signOut()} style={{ color: '#fff', borderColor: '#2e3240' }}>
+            Sign out
+          </button>
+        </header>
+        <div style={{ margin: 'auto', maxWidth: 500, width: '100%', background: '#161824', border: '1px solid #282b3d', borderRadius: 16, padding: '40px 32px', textAlign: 'center', boxShadow: '0 20px 60px rgba(0,0,0,0.5)' }}>
+          <div style={{ width: 64, height: 64, borderRadius: '50%', background: '#2e1920', color: '#ef4444', display: 'grid', placeItems: 'center', margin: '0 auto 20px', border: '1px solid #7f1d1d' }}>
+            <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="6" y="4" width="4" height="16" rx="1" /><rect x="14" y="4" width="4" height="16" rx="1" /></svg>
+          </div>
+          <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1.5, color: '#f87171', textTransform: 'uppercase' }}>Access {profile.status}</span>
+          <h1 style={{ font: '700 24px Manrope, sans-serif', margin: '10px 0 10px', color: '#fff' }}>Staff Account {profile.status}</h1>
+          <p style={{ color: '#9ca3af', fontSize: 13, lineHeight: 1.6, margin: '0 0 24px' }}>
+            Your staff account access for <strong>{organization?.name || 'this gym'}</strong> has been temporarily {profile.status.toLowerCase()} by your gym administrator.
+          </p>
+          <div style={{ background: '#1c1f2e', border: '1px solid #2a2e42', borderRadius: 10, padding: '16px', fontSize: 12, color: '#cbd5e1', textAlign: 'left', marginBottom: 24, lineHeight: 1.6 }}>
+            <strong style={{ display: 'block', color: '#fff', marginBottom: 4 }}>Need to restore access?</strong>
+            Please contact your gym administrator or branch manager to reactivate your staff account.
+          </div>
+          <button className="button button-primary" onClick={() => void signOut()} style={{ width: '100%', justifyContent: 'center' }}>
+            Sign out
+          </button>
+        </div>
+      </div>
+    )
+  }
   if (adminView && isPlatformAdmin) {
     return (
       <PlatformAdmin
@@ -1191,6 +1369,9 @@ function App() {
                 setApprovalRequests((prev) => prev.map((r) => (r.id === reqId ? { ...r, status } : r)))
                 setToast(`Request ${status.toLowerCase()} successfully.`)
               }}
+              onEditTeamMember={(member) => setEditingTeamMember(member)}
+              onToggleTeamStatus={(memberId, status) => void handleToggleTeamStatus(memberId, status)}
+              onDeleteTeamMember={(memberId, name) => void handleDeleteTeamMember(memberId, name)}
             />
           )}
           <footer className="page-footer"><span>© {new Date().getFullYear()} GymPoint Technologies</span><span><i className="footer-status" /> System operational</span><button onClick={() => setToast('Your workspace data is encrypted and synced securely.')}>Privacy &amp; security</button></footer>
@@ -1348,6 +1529,16 @@ function App() {
           branches={branches}
           onClose={() => setShowInviteTeam(false)}
           onSubmit={handleInviteTeam}
+        />
+      )}
+
+      {/* Edit Team Member Modal */}
+      {editingTeamMember && (
+        <EditTeamModal
+          member={editingTeamMember}
+          branches={branches}
+          onClose={() => setEditingTeamMember(null)}
+          onSave={handleSaveTeamMember}
         />
       )}
 
@@ -1707,6 +1898,9 @@ function ModulePage({
   onOpenRecordPayment,
   onViewReceipt,
   onApproveRequest,
+  onEditTeamMember,
+  onToggleTeamStatus,
+  onDeleteTeamMember,
 }: {
   page: Page
   profile: Profile | null
@@ -1731,6 +1925,9 @@ function ModulePage({
   onOpenRecordPayment: () => void
   onViewReceipt: (payment: Payment) => void
   onApproveRequest: (id: string, status: 'Approved' | 'Rejected') => void
+  onEditTeamMember: (member: TeamMember) => void
+  onToggleTeamStatus: (memberId: string, currentStatus: string) => void
+  onDeleteTeamMember: (memberId: string, name: string) => void
 }) {
   const [orgName, setOrgName] = useState(organization?.name ?? '')
   const [contactEmail, setContactEmail] = useState(organization?.contact_email ?? '')
@@ -2017,14 +2214,50 @@ function ModulePage({
             </div>
             <div className="member-table-wrap">
               <table className="directory-table">
-                <thead><tr><th>STAFF MEMBER</th><th>ASSIGNED ROLE</th><th>BRANCH SCOPE</th><th>STATUS</th></tr></thead>
+                <thead><tr><th>STAFF MEMBER</th><th>ASSIGNED ROLE</th><th>BRANCH SCOPE</th><th>STATUS</th><th>ACTIONS</th></tr></thead>
                 <tbody>
                   {teamMembers.map((t) => (
                     <tr key={t.id}>
                       <td><div className="member-cell"><div className="avatar avatar-purple">{getInitials(t.full_name)}</div><div><strong>{t.full_name}</strong><span>{t.email}</span></div></div></td>
                       <td><span className="badge-pill badge-role">{t.role}</span></td>
                       <td>{t.branch_name || 'All branches'}</td>
-                      <td><span className="badge-pill badge-branch">● Active</span></td>
+                      <td>
+                        <span
+                          className={`badge-pill ${t.status === 'Active' ? 'badge-branch' : t.status === 'Paused' ? 'status-pending' : 'table-btn-danger'}`}
+                          style={{ fontWeight: 700 }}
+                        >
+                          {t.status === 'Active' ? '● Active' : t.status === 'Paused' ? '⏸ Paused' : '⛔ Suspended'}
+                        </span>
+                      </td>
+                      <td>
+                        <div style={{ display: 'flex', gap: '6px' }}>
+                          <button
+                            type="button"
+                            className="table-btn table-btn-primary"
+                            onClick={() => onEditTeamMember(t)}
+                            title="Edit staff details and duties"
+                          >
+                            Edit
+                          </button>
+                          <button
+                            type="button"
+                            className={`table-btn ${t.status === 'Active' ? 'table-btn-danger' : 'table-btn-success'}`}
+                            onClick={() => onToggleTeamStatus(t.id, t.status)}
+                            title={t.status === 'Active' ? 'Pause/Suspend access' : 'Resume access'}
+                          >
+                            {t.status === 'Active' ? 'Pause' : 'Resume'}
+                          </button>
+                          <button
+                            type="button"
+                            className="table-btn"
+                            style={{ color: '#dc2626', borderColor: '#fecaca' }}
+                            onClick={() => onDeleteTeamMember(t.id, t.full_name)}
+                            title="Remove staff member from gym"
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      </td>
                     </tr>
                   ))}
                 </tbody>

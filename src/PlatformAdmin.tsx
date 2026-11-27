@@ -319,6 +319,7 @@ export default function PlatformAdmin({
               full_name: adminName,
               organization_id: directOrg.id,
               role: 'org_admin',
+              must_change_password: true,
             },
           },
         })
@@ -337,6 +338,8 @@ export default function PlatformAdmin({
             role: 'org_admin',
             organization_id: directOrg.id,
             branch_id: branchData?.id ?? null,
+            status: 'Active',
+            must_change_password: true,
           })
         }
       }

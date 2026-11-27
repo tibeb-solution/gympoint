@@ -385,3 +385,11 @@ on conflict (id) do update set role = 'platform_admin', email = excluded.email;
 -- PROFILE AVATAR MIGRATION
 -- ==============================================================================
 alter table public.profiles add column if not exists avatar_url text;
+
+
+-- ==============================================================================
+-- TEAM STATUS & TEMPORARY PASSWORD MIGRATION
+-- ==============================================================================
+alter table public.profiles add column if not exists status text default 'Active' check (status in ('Active', 'Paused', 'Suspended'));
+alter table public.profiles add column if not exists must_change_password boolean default false;
+alter table public.profiles add column if not exists job_title text;
