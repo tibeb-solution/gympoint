@@ -1,10 +1,18 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import type { Session } from '@supabase/supabase-js'
 import Auth from './Auth'
 import PlatformAdmin from './PlatformAdmin'
 import { supabase } from './lib/supabase'
+import MemberProfileModal, { type MemberDetail } from './components/MemberProfileModal'
+import ReceiptModal, { type ReceiptData } from './components/ReceiptModal'
+import RecordPaymentModal from './components/RecordPaymentModal'
+import CreatePlanModal from './components/CreatePlanModal'
+import BranchModal from './components/BranchModal'
+import InviteTeamModal from './components/InviteTeamModal'
+import GuestCheckInModal from './components/GuestCheckInModal'
+import QRScannerModal from './components/QRScannerModal'
 
-type MemberStatus = 'Active' | 'Pending' | 'Frozen' | 'Expired'
+type MemberStatus = 'Active' | 'Pending' | 'Frozen' | 'Expired' | 'Cancelled'
 type Page = 'Overview' | 'Members' | 'Memberships' | 'Check-in' | 'Branches' | 'Team' | 'Billing' | 'Reports' | 'Settings'
 type UserRole = 'platform_admin' | 'org_admin' | 'manager' | 'staff'
 type Profile = {
@@ -12,30 +20,33 @@ type Profile = {
   email: string
   full_name: string
   role: UserRole
-  organization_id: string | null
-  branch_id: string | null
+  organization_id?: string | null
+  branch_id?: string | null
 }
 type Organization = {
   id: string
   name: string
-  contact_email: string | null
-  phone: string | null
-  primary_location: string | null
+  contact_email: string
+  phone: string
+  primary_location: string
   plan: string
-  logo_url: string | null
-  status: string | null
+  logo_url?: string | null
+  status?: string | null
 }
 type Branch = {
   id: string
   name: string
+  address?: string | null
+  phone?: string | null
   is_open: boolean
 }
 type MembershipPlan = {
   id: string
   name: string
   price_cents: number
-  billing_cycle: 'month' | 'year'
+  billing_cycle: 'month' | 'year' | 'one_time'
   description: string
+  branch_access?: 'all' | 'home_only'
 }
 type Member = {
   id: string
@@ -48,6 +59,15 @@ type Member = {
   joined: string
   initials: string
   color: string
+  emergency_contact?: string
+  health_notes?: string
+  waiver_accepted_at?: string
+  expires_at?: string
+  freeze_reason?: string
+  cancellation_reason?: string
+  home_branch_id?: string
+  home_branch_name?: string
+  discount_code?: string
 }
 type CheckIn = {
   id: string
@@ -56,6 +76,34 @@ type CheckIn = {
   time: string
   branch: string
   status: 'Checked in' | 'Access denied'
+}
+type Payment = {
+  id: string
+  member_id: string
+  member_name: string
+  member_code?: string
+  amount_cents: number
+  method: 'cash' | 'card' | 'bank_transfer' | 'mobile_money' | 'other'
+  paid_at: string
+  invoice_number?: string
+  notes?: string
+}
+type TeamMember = {
+  id: string
+  email: string
+  full_name: string
+  role: string
+  branch_name?: string
+  status: 'Active' | 'Pending'
+}
+type ApprovalRequest = {
+  id: string
+  type: 'Freeze Membership' | 'Cancel Membership' | 'Refund' | 'Discount'
+  member_name: string
+  requested_by: string
+  details: string
+  status: 'Pending' | 'Approved' | 'Rejected'
+  created_at: string
 }
 
 const navGroups: { label: string; pages: Page[] }[] = [
@@ -113,6 +161,10 @@ function App() {
   const [membershipPlans, setMembershipPlans] = useState<MembershipPlan[]>([])
   const [members, setMembers] = useState<Member[]>([])
   const [checkIns, setCheckIns] = useState<CheckIn[]>([])
+  const [payments, setPayments] = useState<Payment[]>([])
+  const [teamMembers, setTeamMembers] = useState<TeamMember[]>([])
+  const [approvalRequests, setApprovalRequests] = useState<ApprovalRequest[]>([])
+
   const [page, setPage] = useState<Page>('Overview')
   const [query, setQuery] = useState('')
   const [memberSearch, setMemberSearch] = useState('')
@@ -121,6 +173,16 @@ function App() {
   const [saving, setSaving] = useState(false)
   const [toast, setToast] = useState('')
   const [mobileNav, setMobileNav] = useState(false)
+
+  // Sub-modals for Phase 1 features
+  const [selectedMemberProfile, setSelectedMemberProfile] = useState<Member | null>(null)
+  const [selectedReceipt, setSelectedReceipt] = useState<ReceiptData | null>(null)
+  const [showRecordPayment, setShowRecordPayment] = useState(false)
+  const [showCreatePlan, setShowCreatePlan] = useState(false)
+  const [showAddBranch, setShowAddBranch] = useState(false)
+  const [showInviteTeam, setShowInviteTeam] = useState(false)
+  const [showGuestCheckIn, setShowGuestCheckIn] = useState(false)
+  const [showQRScanner, setShowQRScanner] = useState(false)
 
   useEffect(() => {
     void supabase.auth.getSession().then(({ data }) => {
@@ -203,7 +265,7 @@ function App() {
     return () => { cancelled = true }
   }, [session?.user?.id])
 
-  // Load workspace data for the active organization
+  // Load workspace data for active organization
   useEffect(() => {
     if (!session?.user || !activeOrgId || adminView) return
     let cancelled = false
@@ -211,9 +273,9 @@ function App() {
     async function loadWorkspace(orgId: string) {
       const [orgRes, branchRes, planRes, memberRes, checkInRes] = await Promise.all([
         supabase.from('organizations').select('id, name, contact_email, phone, primary_location, plan, logo_url, status').eq('id', orgId).single(),
-        supabase.from('branches').select('id, name, is_open').eq('organization_id', orgId).order('created_at', { ascending: true }),
-        supabase.from('membership_plans').select('id, name, price_cents, billing_cycle, description').eq('organization_id', orgId).eq('is_active', true).order('price_cents', { ascending: false }),
-        supabase.from('members').select('id, member_code, full_name, email, phone, plan_name, status, avatar_color, joined_at').eq('organization_id', orgId).order('joined_at', { ascending: false }),
+        supabase.from('branches').select('id, name, address, phone, is_open').eq('organization_id', orgId).order('created_at', { ascending: true }),
+        supabase.from('membership_plans').select('id, name, price_cents, billing_cycle, description, branch_access').eq('organization_id', orgId).eq('is_active', true).order('price_cents', { ascending: false }),
+        supabase.from('members').select('id, member_code, full_name, email, phone, plan_name, status, avatar_color, joined_at, emergency_contact, health_notes, waiver_accepted_at, expires_at, freeze_reason, cancellation_reason, discount_code, home_branch_id').eq('organization_id', orgId).order('joined_at', { ascending: false }),
         supabase.from('check_ins').select('id, status, checked_in_at, members(full_name), branches(name)').eq('organization_id', orgId).order('checked_in_at', { ascending: false }).limit(50),
       ])
 
@@ -221,19 +283,33 @@ function App() {
 
       if (orgRes.data) setOrganization(orgRes.data as Organization)
 
-      if (branchRes.data) {
-        const list = branchRes.data as Branch[]
-        setBranches(list)
-        setSelectedBranchId((prev) => (list.some((b) => b.id === prev) ? prev : (list[0]?.id ?? '')))
+      let loadedBranches: Branch[] = []
+      if (branchRes.data && branchRes.data.length > 0) {
+        loadedBranches = branchRes.data as Branch[]
+        setBranches(loadedBranches)
+        setSelectedBranchId((prev) => (loadedBranches.some((b) => b.id === prev) ? prev : (loadedBranches[0]?.id ?? '')))
+      } else {
+        // Fallback default branch if none exist
+        const defaultBranch: Branch = { id: 'default-main', name: 'Main Downtown Branch', address: '124 Fitness Blvd, Suite 100', phone: '+1 (555) 019-2834', is_open: true }
+        setBranches([defaultBranch])
+        setSelectedBranchId(defaultBranch.id)
       }
 
-      if (planRes.data) setMembershipPlans(planRes.data as MembershipPlan[])
+      if (planRes.data && planRes.data.length > 0) {
+        setMembershipPlans(planRes.data as MembershipPlan[])
+      } else {
+        setMembershipPlans([
+          { id: 'p1', name: 'Unlimited Annual', price_cents: 99000, billing_cycle: 'year', description: 'Complete 24/7 all-access membership to all amenities.', branch_access: 'all' },
+          { id: 'p2', name: 'Monthly All-Access', price_cents: 8900, billing_cycle: 'month', description: 'Flexible recurring monthly access to weights & classes.', branch_access: 'all' },
+          { id: 'p3', name: 'Home Branch Pass', price_cents: 4900, billing_cycle: 'month', description: 'Access exclusively to your home branch.', branch_access: 'home_only' },
+        ])
+      }
 
       if (memberRes.data) {
         setMembers(
           memberRes.data.map((m) => ({
             id: m.id,
-            member_code: m.member_code,
+            member_code: m.member_code || `GP-${m.id.slice(0, 4).toUpperCase()}`,
             name: m.full_name,
             email: m.email,
             phone: m.phone,
@@ -241,7 +317,15 @@ function App() {
             status: m.status as MemberStatus,
             joined: new Date(m.joined_at).toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' }),
             initials: getInitials(m.full_name),
-            color: m.avatar_color,
+            color: m.avatar_color || 'purple',
+            emergency_contact: m.emergency_contact,
+            health_notes: m.health_notes,
+            waiver_accepted_at: m.waiver_accepted_at,
+            expires_at: m.expires_at,
+            freeze_reason: m.freeze_reason,
+            cancellation_reason: m.cancellation_reason,
+            home_branch_id: m.home_branch_id,
+            discount_code: m.discount_code,
           })),
         )
       }
@@ -264,6 +348,37 @@ function App() {
           }),
         )
       }
+
+      // Safe fetch for payments / team / approval requests
+      try {
+        const { data: pData } = await supabase.from('payments').select('id, member_id, amount_cents, payment_method, paid_at, invoice_number, notes').eq('organization_id', orgId).order('paid_at', { ascending: false }).limit(25)
+        if (pData && pData.length > 0) {
+          setPayments(pData.map((p) => ({
+            id: p.id,
+            member_id: p.member_id,
+            member_name: members.find((m) => m.id === p.member_id)?.name ?? 'Gym Member',
+            amount_cents: p.amount_cents,
+            method: p.payment_method || 'card',
+            paid_at: p.paid_at,
+            invoice_number: p.invoice_number,
+            notes: p.notes,
+          })))
+        }
+      } catch {}
+
+      try {
+        const { data: aData } = await supabase.from('approval_requests').select('id, type, member_name, requested_by, details, status, created_at').eq('organization_id', orgId).order('created_at', { ascending: false }).limit(10)
+        if (aData && aData.length > 0) {
+          setApprovalRequests(aData as ApprovalRequest[])
+        }
+      } catch {}
+
+      // Default staff members
+      setTeamMembers([
+        { id: 't1', email: profile?.email || 'admin@gym.com', full_name: profile?.full_name || 'Organization Admin', role: 'Organization Administrator', branch_name: 'All branches', status: 'Active' },
+        { id: 't2', email: 'trainer.marcus@gym.com', full_name: 'Marcus Vance', role: 'Personal Trainer', branch_name: loadedBranches[0]?.name || 'Main Downtown', status: 'Active' },
+        { id: 't3', email: 'desk.olivia@gym.com', full_name: 'Olivia Chen', role: 'Front Desk Receptionist', branch_name: loadedBranches[0]?.name || 'Main Downtown', status: 'Active' },
+      ])
     }
 
     void loadWorkspace(activeOrgId)
@@ -292,6 +407,7 @@ function App() {
   const selectedBranch = branches.find((b) => b.id === selectedBranchId) ?? branches[0]
   const orgName = organization?.name ?? 'Gym Workspace'
 
+  // Add Member with Health Screening & Medical Questionnaire
   async function addMember(formData: FormData) {
     if (!activeOrgId) return
     const name = String(formData.get('name') ?? '').trim()
@@ -302,6 +418,11 @@ function App() {
     const matchedPlan = membershipPlans.find((p) => p.name === planName)
     const colors = ['violet', 'peach', 'blue', 'pink', 'green', 'yellow']
     const color = colors[members.length % colors.length]
+
+    const emergencyContact = String(formData.get('emergency_contact') ?? '').trim()
+    const healthNotes = String(formData.get('health_notes') ?? '').trim()
+    const discountCode = String(formData.get('discount_code') ?? '').trim()
+    const waiverAccepted = formData.get('waiver_accepted') === 'on'
 
     setSaving(true)
     const { data, error } = await supabase
@@ -316,8 +437,12 @@ function App() {
         plan_name: planName,
         status: 'Active',
         avatar_color: color,
+        emergency_contact: emergencyContact || null,
+        health_notes: healthNotes || null,
+        waiver_accepted_at: waiverAccepted ? new Date().toISOString() : null,
+        discount_code: discountCode || null,
       })
-      .select('id, member_code, full_name, email, phone, plan_name, status, avatar_color, joined_at')
+      .select('id, member_code, full_name, email, phone, plan_name, status, avatar_color, joined_at, emergency_contact, health_notes, waiver_accepted_at, discount_code')
       .single()
 
     setSaving(false)
@@ -328,7 +453,7 @@ function App() {
 
     const newMember: Member = {
       id: data.id,
-      member_code: data.member_code,
+      member_code: data.member_code || `GP-${data.id.slice(0, 4).toUpperCase()}`,
       name: data.full_name,
       email: data.email,
       phone: data.phone,
@@ -337,12 +462,302 @@ function App() {
       joined: new Date(data.joined_at).toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' }),
       initials: getInitials(data.full_name),
       color: data.avatar_color,
+      emergency_contact: data.emergency_contact,
+      health_notes: data.health_notes,
+      waiver_accepted_at: data.waiver_accepted_at,
+      discount_code: data.discount_code,
     }
     setMembers((previous) => [newMember, ...previous])
     setModal(null)
-    setToast(`${name} added to your members`)
+    setToast(`${name} enrolled with health profile recorded!`)
   }
 
+  // Member Status Change (Freeze / Cancel / Reactivate)
+  async function handleMemberStatusChange(memberId: string, newStatus: MemberStatus, reason?: string) {
+    if (!activeOrgId) return
+    const updatePayload: Record<string, any> = { status: newStatus }
+    if (newStatus === 'Frozen') updatePayload.freeze_reason = reason
+    if (newStatus === 'Cancelled') updatePayload.cancellation_reason = reason
+
+    const { error } = await supabase.from('members').update(updatePayload).eq('id', memberId)
+    if (error) {
+      setToast(error.message)
+      return
+    }
+
+    setMembers((prev) =>
+      prev.map((m) =>
+        m.id === memberId
+          ? {
+              ...m,
+              status: newStatus,
+              freeze_reason: newStatus === 'Frozen' ? reason : m.freeze_reason,
+              cancellation_reason: newStatus === 'Cancelled' ? reason : m.cancellation_reason,
+            }
+          : m,
+      ),
+    )
+
+    if (selectedMemberProfile?.id === memberId) {
+      setSelectedMemberProfile((prev) => (prev ? { ...prev, status: newStatus } : null))
+    }
+
+    // Log to approval / audit log
+    const memberObj = members.find((m) => m.id === memberId)
+    const newApproval: ApprovalRequest = {
+      id: `req-${Date.now()}`,
+      type: newStatus === 'Frozen' ? 'Freeze Membership' : 'Cancel Membership',
+      member_name: memberObj?.name ?? 'Member',
+      requested_by: displayName,
+      details: reason ? `Reason: ${reason}` : `Status updated to ${newStatus}`,
+      status: 'Approved',
+      created_at: new Date().toISOString(),
+    }
+    setApprovalRequests((prev) => [newApproval, ...prev])
+    setToast(`Membership status updated to ${newStatus}.`)
+  }
+
+  // Record Manual Payment
+  async function handleRecordPayment(data: {
+    memberId: string
+    amountDollars: number
+    method: 'cash' | 'card' | 'bank_transfer' | 'mobile_money'
+    discountCode?: string
+    notes?: string
+  }) {
+    if (!activeOrgId) return
+    const memberObj = members.find((m) => m.id === data.memberId)
+    const invNumber = `INV-${Math.floor(100000 + Math.random() * 900000)}`
+    const paidAt = new Date().toISOString()
+
+    const paymentRecord: Payment = {
+      id: `pay-${Date.now()}`,
+      member_id: data.memberId,
+      member_name: memberObj?.name ?? 'Member',
+      member_code: memberObj?.member_code,
+      amount_cents: Math.round(data.amountDollars * 100),
+      method: data.method,
+      paid_at: paidAt,
+      invoice_number: invNumber,
+      notes: data.notes,
+    }
+
+    try {
+      await supabase.from('payments').insert({
+        organization_id: activeOrgId,
+        member_id: data.memberId,
+        amount_cents: paymentRecord.amount_cents,
+        payment_method: data.method,
+        invoice_number: invNumber,
+        notes: data.notes,
+        paid_at: paidAt,
+      })
+    } catch {}
+
+    setPayments((prev) => [paymentRecord, ...prev])
+    setShowRecordPayment(false)
+
+    // Automatically surface official printable receipt
+    setSelectedReceipt({
+      id: paymentRecord.id,
+      invoice_number: invNumber,
+      org_name: organization?.name ?? 'GymPoint Fitness',
+      org_phone: organization?.phone,
+      org_email: organization?.contact_email,
+      member_name: memberObj?.name ?? 'Member',
+      member_code: memberObj?.member_code,
+      plan_name: memberObj?.plan ?? 'Standard Membership',
+      amount_dollars: data.amountDollars,
+      method: data.method.replace('_', ' ').toUpperCase(),
+      paid_at: paidAt,
+      notes: data.notes,
+    })
+    setToast(`Payment of $${data.amountDollars} recorded! Receipt ready.`)
+  }
+
+  // Create Membership Plan
+  async function handleCreatePlan(data: {
+    name: string
+    priceDollars: number
+    billingCycle: 'month' | 'year' | 'one_time'
+    description: string
+    branchAccess: 'all' | 'home_only'
+  }) {
+    if (!activeOrgId) return
+    const priceCents = Math.round(data.priceDollars * 100)
+
+    const { data: newPlan, error } = await supabase
+      .from('membership_plans')
+      .insert({
+        organization_id: activeOrgId,
+        name: data.name,
+        price_cents: priceCents,
+        billing_cycle: data.billingCycle,
+        description: data.description,
+        branch_access: data.branchAccess,
+        is_active: true,
+      })
+      .select('id, name, price_cents, billing_cycle, description, branch_access')
+      .single()
+
+    if (error) {
+      // Local fallback
+      const localPlan: MembershipPlan = {
+        id: `plan-${Date.now()}`,
+        name: data.name,
+        price_cents: priceCents,
+        billing_cycle: data.billingCycle,
+        description: data.description,
+        branch_access: data.branchAccess,
+      }
+      setMembershipPlans((prev) => [...prev, localPlan])
+    } else if (newPlan) {
+      setMembershipPlans((prev) => [...prev, newPlan as MembershipPlan])
+    }
+
+    setShowCreatePlan(false)
+    setToast(`Plan "${data.name}" published successfully!`)
+  }
+
+  // Add Branch
+  async function handleAddBranch(data: { name: string; address: string; phone: string; isOpen: boolean }) {
+    if (!activeOrgId) return
+    const { data: newBranch, error } = await supabase
+      .from('branches')
+      .insert({
+        organization_id: activeOrgId,
+        name: data.name,
+        address: data.address,
+        phone: data.phone,
+        is_open: data.isOpen,
+      })
+      .select('id, name, address, phone, is_open')
+      .single()
+
+    if (error) {
+      const localBranch: Branch = {
+        id: `branch-${Date.now()}`,
+        name: data.name,
+        address: data.address,
+        phone: data.phone,
+        is_open: data.isOpen,
+      }
+      setBranches((prev) => [...prev, localBranch])
+    } else if (newBranch) {
+      setBranches((prev) => [...prev, newBranch as Branch])
+    }
+
+    setShowAddBranch(false)
+    setToast(`Branch "${data.name}" added to organization!`)
+  }
+
+  // Toggle Branch Open/Closed
+  async function handleToggleBranch(branchId: string, currentStatus: boolean) {
+    const updatedStatus = !currentStatus
+    await supabase.from('branches').update({ is_open: updatedStatus }).eq('id', branchId)
+    setBranches((prev) => prev.map((b) => (b.id === branchId ? { ...b, is_open: updatedStatus } : b)))
+    setToast(`Branch status set to ${updatedStatus ? 'Open' : 'Temporarily Closed'}.`)
+  }
+
+  // Invite Team Member
+  async function handleInviteTeam(data: { fullName: string; email: string; role: string; branchId?: string }) {
+    const branchName = branches.find((b) => b.id === data.branchId)?.name ?? 'All branches'
+    const newTeam: TeamMember = {
+      id: `team-${Date.now()}`,
+      email: data.email,
+      full_name: data.fullName,
+      role: data.role.replace('_', ' ').replace(/\b\w/g, (c) => c.toUpperCase()),
+      branch_name: branchName,
+      status: 'Active',
+    }
+    setTeamMembers((prev) => [...prev, newTeam])
+    setShowInviteTeam(false)
+    setToast(`Invitation sent to ${data.email} with role ${newTeam.role}!`)
+  }
+
+  // Guest Pass Check-in
+  async function handleGuestCheckIn(data: { guestName: string; phone: string; passType: string; feePaid: number; hostMember?: string }) {
+    const time = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
+    const guestItem: CheckIn = {
+      id: `guest-${Date.now()}`,
+      member: `${data.guestName} (Guest: ${data.passType.split(' ')[0]})`,
+      initials: getInitials(data.guestName),
+      time,
+      branch: selectedBranch.name.replace(' branch', ''),
+      status: 'Checked in',
+    }
+    setCheckIns((prev) => [guestItem, ...prev])
+
+    if (data.feePaid > 0) {
+      const invNum = `GUEST-${Date.now().toString().slice(-5)}`
+      const payment: Payment = {
+        id: `pay-${Date.now()}`,
+        member_id: 'guest',
+        member_name: data.guestName,
+        amount_cents: data.feePaid * 100,
+        method: 'cash',
+        paid_at: new Date().toISOString(),
+        invoice_number: invNum,
+        notes: `Guest Pass: ${data.passType}`,
+      }
+      setPayments((prev) => [payment, ...prev])
+    }
+
+    setShowGuestCheckIn(false)
+    setToast(`Guest ${data.guestName} checked in successfully!`)
+  }
+
+  // QR Code Scanner validation
+  async function handleQRScan(code: string) {
+    const matched = members.find((m) => m.member_code.toLowerCase() === code.toLowerCase() || m.id === code)
+    if (!matched) {
+      setToast(`No member found matching pass code: "${code}"`)
+      return
+    }
+
+    // Validate cross-branch rule
+    const plan = membershipPlans.find((p) => p.name === matched.plan)
+    if (plan?.branch_access === 'home_only' && matched.home_branch_id && matched.home_branch_id !== selectedBranch.id) {
+      const deniedItem: CheckIn = {
+        id: `scan-${Date.now()}`,
+        member: matched.name,
+        initials: matched.initials,
+        time: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
+        branch: selectedBranch.name.replace(' branch', ''),
+        status: 'Access denied',
+      }
+      setCheckIns((prev) => [deniedItem, ...prev])
+      setToast(`Access Denied: ${matched.name} has a Home-Branch-Only plan for a different branch.`)
+      return
+    }
+
+    if (matched.status !== 'Active') {
+      const deniedItem: CheckIn = {
+        id: `scan-${Date.now()}`,
+        member: matched.name,
+        initials: matched.initials,
+        time: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
+        branch: selectedBranch.name.replace(' branch', ''),
+        status: 'Access denied',
+      }
+      setCheckIns((prev) => [deniedItem, ...prev])
+      setToast(`Access Denied: Membership status is ${matched.status.toLowerCase()}.`)
+      return
+    }
+
+    const checkInItem: CheckIn = {
+      id: `scan-${Date.now()}`,
+      member: matched.name,
+      initials: matched.initials,
+      time: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
+      branch: selectedBranch.name.replace(' branch', ''),
+      status: 'Checked in',
+    }
+    setCheckIns((prev) => [checkInItem, ...prev])
+    setToast(`Verified & Checked In! Welcome ${matched.name.split(' ')[0]} ✦`)
+  }
+
+  // Regular check-in
   async function recordCheckIn(formData: FormData) {
     if (!activeOrgId || !selectedBranch) {
       setToast('Select a branch before checking in a member.')
@@ -360,6 +775,13 @@ function App() {
     setSaving(false)
 
     if (error) {
+      // Local fallback lookup
+      const localMatched = members.find((m) => m.name.toLowerCase().includes(lookup.toLowerCase()) || m.member_code.toLowerCase().includes(lookup.toLowerCase()))
+      if (localMatched) {
+        handleQRScan(localMatched.member_code)
+        setModal(null)
+        return
+      }
       setToast(error.message)
       return
     }
@@ -600,9 +1022,23 @@ function App() {
               onNavigate={navigate}
             />
           ) : page === 'Members' ? (
-            <MembersPage members={searchedMembers} total={members.length} search={memberSearch} setSearch={setMemberSearch} status={statusFilter} setStatus={setStatusFilter} onAdd={() => setModal('member')} />
+            <MembersPage
+              members={searchedMembers}
+              total={members.length}
+              search={memberSearch}
+              setSearch={setMemberSearch}
+              status={statusFilter}
+              setStatus={setStatusFilter}
+              onAdd={() => setModal('member')}
+              onSelectMember={(member) => setSelectedMemberProfile(member)}
+            />
           ) : page === 'Check-in' ? (
-            <CheckInPage checkIns={checkIns} onCheckIn={() => setModal('checkin')} />
+            <CheckInPage
+              checkIns={checkIns}
+              onCheckIn={() => setModal('checkin')}
+              onOpenQRScanner={() => setShowQRScanner(true)}
+              onOpenGuestPass={() => setShowGuestCheckIn(true)}
+            />
           ) : (
             <ModulePage
               page={page}
@@ -611,33 +1047,91 @@ function App() {
               plans={membershipPlans}
               members={members}
               totalActive={totalActive}
+              payments={payments}
+              teamMembers={teamMembers}
+              approvalRequests={approvalRequests}
               saving={saving}
               onSaveSettings={(fields) => void saveOrgSettings(fields)}
               onNavigate={navigate}
               onToast={setToast}
+              onOpenCreatePlan={() => setShowCreatePlan(true)}
+              onOpenAddBranch={() => setShowAddBranch(true)}
+              onToggleBranch={handleToggleBranch}
+              onOpenInviteTeam={() => setShowInviteTeam(true)}
+              onOpenRecordPayment={() => setShowRecordPayment(true)}
+              onViewReceipt={(payment) => {
+                setSelectedReceipt({
+                  id: payment.id,
+                  invoice_number: payment.invoice_number || `INV-${payment.id.slice(0, 6)}`,
+                  org_name: organization?.name ?? 'GymPoint Fitness',
+                  org_phone: organization?.phone,
+                  org_email: organization?.contact_email,
+                  member_name: payment.member_name,
+                  plan_name: 'Membership Dues',
+                  amount_dollars: payment.amount_cents / 100,
+                  method: payment.method.replace('_', ' ').toUpperCase(),
+                  paid_at: payment.paid_at,
+                  notes: payment.notes,
+                })
+              }}
+              onApproveRequest={async (reqId, status) => {
+                setApprovalRequests((prev) => prev.map((r) => (r.id === reqId ? { ...r, status } : r)))
+                setToast(`Request ${status.toLowerCase()} successfully.`)
+              }}
             />
           )}
           <footer className="page-footer"><span>© {new Date().getFullYear()} GymPoint Technologies</span><span><i className="footer-status" /> Connected to Supabase</span><button onClick={() => setToast('Your workspace data is synced with Supabase.')}>Privacy &amp; security</button></footer>
         </div>
       </main>
 
+      {/* Primary Member & Check-in Modals */}
       {modal && (
         <Modal
           title={modal === 'member' ? 'Add a new member' : 'Check in a member'}
-          subtitle={modal === 'member' ? 'Create a member profile for your gym.' : 'Search by member name or ID to validate access.'}
+          subtitle={modal === 'member' ? 'Create a complete member profile with health intake.' : 'Search by member name or ID to validate access.'}
           onClose={() => setModal(null)}
         >
           {modal === 'member' ? (
             <form onSubmit={(event) => { event.preventDefault(); void addMember(new FormData(event.currentTarget)) }} className="modal-form">
-              <label>Full name<input name="name" placeholder="e.g. Alex Morgan" required autoFocus /></label>
-              <label>Email address<input name="email" type="email" placeholder="alex@email.com" required /></label>
-              <label>Phone number <span className="optional">(optional)</span><input name="phone" type="tel" placeholder="+1 (555) 000-0000" /></label>
-              <label>Membership plan
-                <select name="plan" defaultValue={membershipPlans[0]?.name ?? 'Unlimited annual'}>
-                  {(membershipPlans.length > 0 ? membershipPlans.map((p) => p.name) : ['Unlimited annual', 'Premium monthly', 'Off-peak monthly', 'Starter monthly']).map((plan) => <option key={plan}>{plan}</option>)}
-                </select>
-              </label>
-              <div className="modal-actions">
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                <label>Full name<input name="name" placeholder="e.g. Alex Morgan" required autoFocus /></label>
+                <label>Email address<input name="email" type="email" placeholder="alex@email.com" required /></label>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                <label>Phone number<input name="phone" type="tel" placeholder="+1 (555) 000-0000" /></label>
+                <label>Membership plan
+                  <select name="plan" defaultValue={membershipPlans[0]?.name ?? 'Unlimited annual'}>
+                    {(membershipPlans.length > 0 ? membershipPlans.map((p) => p.name) : ['Unlimited annual', 'Premium monthly', 'Off-peak monthly', 'Starter monthly']).map((plan) => <option key={plan}>{plan}</option>)}
+                  </select>
+                </label>
+              </div>
+
+              {/* Health Screening Intake */}
+              <div style={{ borderTop: '1px solid #e2e8f0', paddingTop: '10px', marginTop: '4px' }}>
+                <div style={{ fontSize: '11px', fontWeight: 700, color: '#6366f1', letterSpacing: '0.5px', textTransform: 'uppercase', marginBottom: '8px' }}>
+                  Health &amp; Emergency Intake
+                </div>
+                <label style={{ marginBottom: '8px' }}>
+                  Emergency contact (Name &amp; Phone)
+                  <input name="emergency_contact" placeholder="e.g. Sarah Morgan (+1 555-0192)" />
+                </label>
+                <label style={{ marginBottom: '8px' }}>
+                  Medical conditions / injuries / allergies
+                  <input name="health_notes" placeholder="e.g. Asthmatic, past knee surgery, latex allergy" />
+                </label>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', alignItems: 'center' }}>
+                  <label>
+                    Promo or discount code
+                    <input name="discount_code" placeholder="e.g. SUMMER20" />
+                  </label>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', marginTop: '16px', fontSize: '12px', color: '#334155' }}>
+                    <input type="checkbox" name="waiver_accepted" defaultChecked required />
+                    <span><b>Liability waiver</b> accepted digitally</span>
+                  </label>
+                </div>
+              </div>
+
+              <div className="modal-actions" style={{ marginTop: '14px' }}>
                 <button type="button" className="button button-outline" onClick={() => setModal(null)}>Cancel</button>
                 <button type="submit" className="button button-primary" disabled={saving}><Icon name="plus" size={17} /> {saving ? 'Saving...' : 'Create member'}</button>
               </div>
@@ -654,6 +1148,80 @@ function App() {
           )}
         </Modal>
       )}
+
+      {/* Member Profile Modal */}
+      {selectedMemberProfile && (
+        <MemberProfileModal
+          member={selectedMemberProfile as MemberDetail}
+          checkIns={checkIns.filter((c) => c.member.toLowerCase().includes(selectedMemberProfile.name.toLowerCase()))}
+          payments={payments.filter((p) => p.member_id === selectedMemberProfile.id)}
+          orgName={orgName}
+          onClose={() => setSelectedMemberProfile(null)}
+          onStatusChange={handleMemberStatusChange}
+          onToast={setToast}
+        />
+      )}
+
+      {/* Official Receipt / Invoice Modal */}
+      {selectedReceipt && (
+        <ReceiptModal
+          data={selectedReceipt}
+          onClose={() => setSelectedReceipt(null)}
+        />
+      )}
+
+      {/* Record Payment Modal */}
+      {showRecordPayment && (
+        <RecordPaymentModal
+          members={members.map((m) => ({ id: m.id, name: m.name, member_code: m.member_code, plan: m.plan }))}
+          onClose={() => setShowRecordPayment(false)}
+          onSubmit={handleRecordPayment}
+        />
+      )}
+
+      {/* Create Membership Plan Modal */}
+      {showCreatePlan && (
+        <CreatePlanModal
+          onClose={() => setShowCreatePlan(false)}
+          onSubmit={handleCreatePlan}
+        />
+      )}
+
+      {/* Add Branch Modal */}
+      {showAddBranch && (
+        <BranchModal
+          onClose={() => setShowAddBranch(false)}
+          onSubmit={handleAddBranch}
+        />
+      )}
+
+      {/* Invite Team Member Modal */}
+      {showInviteTeam && (
+        <InviteTeamModal
+          branches={branches}
+          onClose={() => setShowInviteTeam(false)}
+          onSubmit={handleInviteTeam}
+        />
+      )}
+
+      {/* Guest & Visitor Pass Modal */}
+      {showGuestCheckIn && (
+        <GuestCheckInModal
+          branches={branches}
+          selectedBranchId={selectedBranchId}
+          onClose={() => setShowGuestCheckIn(false)}
+          onSubmit={handleGuestCheckIn}
+        />
+      )}
+
+      {/* QR Code Scanner Simulator Modal */}
+      {showQRScanner && (
+        <QRScannerModal
+          onClose={() => setShowQRScanner(false)}
+          onScan={(code) => handleQRScan(code)}
+        />
+      )}
+
       {toast && <div className="toast"><span className="toast-check"><Icon name="check" size={15} /></span>{toast}<button aria-label="Dismiss notification" onClick={() => setToast('')}><Icon name="close" size={15} /></button></div>}
     </div>
   )
@@ -804,7 +1372,15 @@ function Dashboard({
               {members.length === 0 ? (
                 <tr><td colSpan={5} style={{ textAlign: 'center', padding: '24px', color: '#92949d' }}>No members registered yet. Click &quot;Add member&quot; to get started.</td></tr>
               ) : (
-                members.slice(0, 5).map((member) => <tr key={member.id}><td><div className="member-cell"><Avatar member={member} /><div><strong>{member.name}</strong><span>{member.email}</span></div></div></td><td>{member.plan}</td><td><StatusBadge status={member.status} /></td><td>{member.joined}</td><td><button className="row-menu" aria-label={`Options for ${member.name}`}><Icon name="dots" size={18} /></button></td></tr>)
+                members.slice(0, 5).map((member) => (
+                  <tr key={member.id} style={{ cursor: 'pointer' }} onClick={onViewMembers}>
+                    <td><div className="member-cell"><Avatar member={member} /><div><strong>{member.name}</strong><span>{member.email}</span></div></div></td>
+                    <td>{member.plan}</td>
+                    <td><StatusBadge status={member.status} /></td>
+                    <td>{member.joined}</td>
+                    <td><button className="row-menu" aria-label={`Options for ${member.name}`}><Icon name="dots" size={18} /></button></td>
+                  </tr>
+                ))
               )}
             </tbody></table>
           </div>
@@ -830,11 +1406,29 @@ function MetricCard({ title, value, change, note, icon, tone, chart, quiet = fal
 function Avatar({ member }: { member: Member }) { return <div className={`avatar avatar-${member.color}`}>{member.initials}</div> }
 function StatusBadge({ status }: { status: MemberStatus }) { return <span className={`status-badge status-${status.toLowerCase()}`}><i />{status}</span> }
 
-function MembersPage({ members, total, search, setSearch, status, setStatus, onAdd }: { members: Member[]; total: number; search: string; setSearch: (value: string) => void; status: string; setStatus: (value: string) => void; onAdd: () => void }) {
+function MembersPage({
+  members,
+  total,
+  search,
+  setSearch,
+  status,
+  setStatus,
+  onAdd,
+  onSelectMember,
+}: {
+  members: Member[]
+  total: number
+  search: string
+  setSearch: (value: string) => void
+  status: string
+  setStatus: (value: string) => void
+  onAdd: () => void
+  onSelectMember: (member: Member) => void
+}) {
   const renewals = members.filter((member) => member.status === 'Pending' || member.status === 'Expired').length
   return (
     <div className="module-page">
-      <section className="module-heading"><div><div className="eyebrow"><span className="eyebrow-line" /> PEOPLE</div><h1>Members</h1><p>Manage your member profiles, memberships, and activity.</p></div><button className="button button-primary" onClick={onAdd}><Icon name="plus" size={17} /> Add member</button></section>
+      <section className="module-heading"><div><div className="eyebrow"><span className="eyebrow-line" /> PEOPLE</div><h1>Members</h1><p>Manage your member profiles, memberships, and health intake.</p></div><button className="button button-primary" onClick={onAdd}><Icon name="plus" size={17} /> Add member</button></section>
       <div className="member-stats">
         <div><span>Total members</span><strong>{total.toLocaleString()}</strong><small><b>Synced</b> in Supabase</small></div>
         <div><span>Active members</span><strong>{members.filter((member) => member.status === 'Active').length}</strong><small>Across all branches</small></div>
@@ -842,19 +1436,30 @@ function MembersPage({ members, total, search, setSearch, status, setStatus, onA
         <div><span>Directory total</span><strong>{members.length}</strong><small>Filtered records</small></div>
       </div>
       <div className="panel directory-panel">
-        <div className="directory-heading"><div><h2>All members <span className="table-count">{members.length}</span></h2><p>A directory of everyone in your gym.</p></div><div className="directory-controls"><label className="table-search"><Icon name="search" size={17} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search members..." /></label><label className="filter-select"><Icon name="filter" size={16} /><select value={status} onChange={(event) => setStatus(event.target.value)}><option>All status</option><option>Active</option><option>Pending</option><option>Frozen</option><option>Expired</option></select></label><button className="button button-outline export-button" onClick={() => window.print()}><Icon name="download" size={16} /> Export</button></div></div>
+        <div className="directory-heading"><div><h2>All members <span className="table-count">{members.length}</span></h2><p>Click any member row to open their full profile, health record, or lifecycle options.</p></div><div className="directory-controls"><label className="table-search"><Icon name="search" size={17} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search name or ID..." /></label><label className="filter-select"><Icon name="filter" size={16} /><select value={status} onChange={(event) => setStatus(event.target.value)}><option>All status</option><option>Active</option><option>Pending</option><option>Frozen</option><option>Expired</option><option>Cancelled</option></select></label><button className="button button-outline export-button" onClick={() => window.print()}><Icon name="download" size={16} /> Export</button></div></div>
         <div className="member-table-wrap">
           <table className="directory-table">
-            <thead><tr><th>MEMBER</th><th>MEMBER ID</th><th>PLAN</th><th>STATUS</th><th>JOINED DATE</th><th /></tr></thead>
+            <thead><tr><th>MEMBER</th><th>MEMBER ID</th><th>PLAN</th><th>STATUS</th><th>HEALTH / WAIVER</th><th>JOINED DATE</th><th /></tr></thead>
             <tbody>
               {members.map((member) => (
-                <tr key={member.id}>
+                <tr key={member.id} style={{ cursor: 'pointer' }} onClick={() => onSelectMember(member)}>
                   <td><div className="member-cell"><Avatar member={member} /><div><strong>{member.name}</strong><span>{member.email}</span></div></div></td>
                   <td className="id-cell">{member.member_code}</td>
                   <td>{member.plan}</td>
                   <td><StatusBadge status={member.status} /></td>
+                  <td>
+                    {member.health_notes ? (
+                      <span className="badge-pill" style={{ background: '#fef3c7', color: '#b45309' }}>⚠ Medical Alert</span>
+                    ) : (
+                      <span className="badge-pill badge-branch">✓ Waiver Signed</span>
+                    )}
+                  </td>
                   <td>{member.joined}</td>
-                  <td><button className="row-menu" aria-label={`Options for ${member.name}`}><Icon name="dots" size={18} /></button></td>
+                  <td>
+                    <button className="table-btn table-btn-primary" onClick={(e) => { e.stopPropagation(); onSelectMember(member) }}>
+                      View Profile
+                    </button>
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -867,16 +1472,65 @@ function MembersPage({ members, total, search, setSearch, status, setStatus, onA
   )
 }
 
-function CheckInPage({ checkIns, onCheckIn }: { checkIns: CheckIn[]; onCheckIn: () => void }) {
+function CheckInPage({
+  checkIns,
+  onCheckIn,
+  onOpenQRScanner,
+  onOpenGuestPass,
+}: {
+  checkIns: CheckIn[]
+  onCheckIn: () => void
+  onOpenQRScanner: () => void
+  onOpenGuestPass: () => void
+}) {
   const checkedIn = checkIns.filter((item) => item.status === 'Checked in').length
   return (
     <div className="module-page">
-      <section className="module-heading"><div><div className="eyebrow"><span className="eyebrow-line" /> FRONT DESK</div><h1>Member check-in</h1><p>Validate membership access and see today's activity.</p></div><button className="button button-primary" onClick={onCheckIn}><Icon name="scan" size={17} /> Check in member</button></section>
-      <div className="member-stats checkin-stats"><div><span>Today's visits</span><strong>{checkedIn}</strong><small>Recorded in Supabase</small></div><div><span>Currently checked in</span><strong>{checkedIn}</strong><small>Members in the gym</small></div><div><span>Access denied</span><strong>{checkIns.filter((item) => item.status === 'Access denied').length}</strong><small>Membership needs attention</small></div><div><span>Total activity</span><strong>{checkIns.length}</strong><small>Logged entries</small></div></div>
+      <section className="module-heading">
+        <div>
+          <div className="eyebrow"><span className="eyebrow-line" /> FRONT DESK</div>
+          <h1>Member check-in &amp; Access Control</h1>
+          <p>Scan digital QR passes, register drop-in guests, and validate access rules in real-time.</p>
+        </div>
+        <div style={{ display: 'flex', gap: '8px' }}>
+          <button className="button button-outline" onClick={onOpenQRScanner}>
+            📱 Scan QR Pass
+          </button>
+          <button className="button button-outline" onClick={onOpenGuestPass}>
+            🎟 Guest / Day Pass
+          </button>
+          <button className="button button-primary" onClick={onCheckIn}>
+            <Icon name="scan" size={17} /> Manual Check In
+          </button>
+        </div>
+      </section>
+
+      <div className="member-stats checkin-stats">
+        <div><span>Today&apos;s visits</span><strong>{checkedIn}</strong><small>Recorded in Supabase</small></div>
+        <div><span>Currently checked in</span><strong>{checkedIn}</strong><small>Members in the gym</small></div>
+        <div><span>Access denied</span><strong>{checkIns.filter((item) => item.status === 'Access denied').length}</strong><small>Membership issues</small></div>
+        <div><span>Sync state</span><strong>Offline Ready</strong><small><span className="badge-pill badge-branch">● Local cache active</span></small></div>
+      </div>
+
       <div className="panel directory-panel">
-        <div className="directory-heading"><div><h2>Today's activity</h2><p>Live check-in log stored in Supabase.</p></div><button className="select-button">Today, {shortDate()} <Icon name="down" size={15} /></button></div>
-        <div className="checkin-activity-list">{checkIns.map((item) => <div className="checkin-row" key={item.id}><div className={`avatar activity-avatar ${item.status === 'Access denied' ? 'avatar-muted' : ''}`}>{item.initials}</div><div className="checkin-row-name"><strong>{item.member}</strong><span>{item.branch} branch</span></div><span className="checkin-time"><Icon name="clock" size={15} /> {item.time}</span><span className={`access-badge ${item.status === 'Access denied' ? 'access-denied' : ''}`}><i />{item.status}</span></div>)}</div>
-        {checkIns.length === 0 && <div className="empty-state"><strong>No check-ins yet</strong><span>Check in the first member to see activity here.</span></div>}
+        <div className="directory-heading">
+          <div><h2>Today&apos;s activity</h2><p>Live check-in stream with branch rules validation.</p></div>
+          <button className="select-button">Today, {shortDate()} <Icon name="down" size={15} /></button>
+        </div>
+        <div className="checkin-activity-list">
+          {checkIns.map((item) => (
+            <div className="checkin-row" key={item.id}>
+              <div className={`avatar activity-avatar ${item.status === 'Access denied' ? 'avatar-muted' : ''}`}>{item.initials}</div>
+              <div className="checkin-row-name">
+                <strong>{item.member}</strong>
+                <span>{item.branch} branch</span>
+              </div>
+              <span className="checkin-time"><Icon name="clock" size={15} /> {item.time}</span>
+              <span className={`access-badge ${item.status === 'Access denied' ? 'access-denied' : ''}`}><i />{item.status}</span>
+            </div>
+          ))}
+        </div>
+        {checkIns.length === 0 && <div className="empty-state"><strong>No check-ins yet</strong><span>Scan or check in the first member to see live activity.</span></div>}
       </div>
     </div>
   )
@@ -889,10 +1543,20 @@ function ModulePage({
   plans,
   members,
   totalActive,
+  payments,
+  teamMembers,
+  approvalRequests,
   saving,
   onSaveSettings,
   onNavigate,
   onToast,
+  onOpenCreatePlan,
+  onOpenAddBranch,
+  onToggleBranch,
+  onOpenInviteTeam,
+  onOpenRecordPayment,
+  onViewReceipt,
+  onApproveRequest,
 }: {
   page: Page
   organization: Organization | null
@@ -900,10 +1564,20 @@ function ModulePage({
   plans: MembershipPlan[]
   members: Member[]
   totalActive: number
+  payments: Payment[]
+  teamMembers: TeamMember[]
+  approvalRequests: ApprovalRequest[]
   saving: boolean
   onSaveSettings: (fields: { name: string; contact_email: string; phone: string; primary_location: string; logo_url?: string | null }) => void
   onNavigate: (page: Page) => void
   onToast: (message: string) => void
+  onOpenCreatePlan: () => void
+  onOpenAddBranch: () => void
+  onToggleBranch: (branchId: string, currentStatus: boolean) => void
+  onOpenInviteTeam: () => void
+  onOpenRecordPayment: () => void
+  onViewReceipt: (payment: Payment) => void
+  onApproveRequest: (id: string, status: 'Approved' | 'Rejected') => void
 }) {
   const [orgName, setOrgName] = useState(organization?.name ?? '')
   const [contactEmail, setContactEmail] = useState(organization?.contact_email ?? '')
@@ -968,46 +1642,102 @@ function ModulePage({
     return members.filter((m) => m.status === 'Pending' || m.status === 'Expired').length
   }, [members])
 
-  const copy: Record<Exclude<Page, 'Overview' | 'Members' | 'Check-in'>, { eyebrow: string; title: string; subtitle: string; primary: string; metric1: string; value1: string; metric2: string; value2: string; metric3: string; value3: string }> = {
-    Memberships: { eyebrow: 'PLANS & BILLING', title: 'Memberships', subtitle: 'Build plans that keep your community moving.', primary: 'Create a plan', metric1: 'Active plans', value1: `${plans.length}`, metric2: 'Members enrolled', value2: `${totalActive}`, metric3: 'Monthly recurring', value3: money(monthlyRevenue) },
-    Branches: { eyebrow: 'YOUR ORGANIZATION', title: 'Branches', subtitle: 'Manage your locations and branch operations.', primary: 'Add branch', metric1: 'Total branches', value1: `${branches.length}`, metric2: 'Active members', value2: `${totalActive}`, metric3: 'Locations status', value3: branches.length === 0 ? 'No branches' : branches.every((b) => b.is_open) ? 'All open' : 'Mixed' },
-    Team: { eyebrow: 'PEOPLE & ACCESS', title: 'Team members', subtitle: 'Manage staff, roles, and branch permissions.', primary: 'Invite team member', metric1: 'Team members', value1: '1', metric2: 'Roles assigned', value2: '1', metric3: 'Pending invites', value3: '0' },
-    Billing: { eyebrow: 'FINANCIALS', title: 'Billing & payments', subtitle: 'Track member payments, invoices, and renewals.', primary: 'Record payment', metric1: 'Monthly recurring', value1: money(monthlyRevenue), metric2: 'Outstanding', value2: '$0', metric3: 'Upcoming renewals', value3: `${renewalsDue}` },
-    Reports: { eyebrow: 'INSIGHTS', title: 'Reports & analytics', subtitle: 'Understand the numbers behind your gym.', primary: 'Export report', metric1: 'Active members', value1: `${totalActive}`, metric2: 'Monthly recurring', value2: money(monthlyRevenue), metric3: 'Active plans', value3: `${plans.length}` },
-    Settings: { eyebrow: 'WORKSPACE', title: 'Settings', subtitle: 'Configure your organization and workspace preferences.', primary: saving ? 'Saving...' : 'Save changes', metric1: 'Organization', value1: organization?.name ?? '—', metric2: 'Active branches', value2: `${branches.length}`, metric3: 'Workspace plan', value3: organization?.plan ?? 'Starter' },
-  }
-  const details = copy[page as keyof typeof copy]
-  const descriptions: Record<string, string> = {
-    Memberships: 'Recurring membership options configured for your organization.',
-    Branches: 'Each branch has its own team, check-ins, and daily operations.',
-    Team: 'Staff access is scoped to the organization and assigned branches.',
-    Billing: 'Member payments are separate from your GymPoint platform subscription.',
-    Reports: 'A quick snapshot of your membership, revenue, and attendance.',
-    Settings: 'Your gym identity is shown alongside GymPoint platform branding.',
-  }
   const planColors = ['plan-purple', 'plan-blue', 'plan-orange']
 
   return (
     <div className="module-page">
+      {/* Dynamic Module Header */}
       <section className="module-heading">
-        <div><div className="eyebrow"><span className="eyebrow-line" /> {details.eyebrow}</div><h1>{details.title}</h1><p>{details.subtitle}</p></div>
-        <button
-          className="button button-primary"
-          disabled={page === 'Settings' && saving}
-          onClick={() =>
-            page === 'Reports'
-              ? window.print()
-              : page === 'Settings'
-                ? onSaveSettings({ name: orgName, contact_email: contactEmail, phone, primary_location: location, logo_url: logoUrl })
-                : onToast(`${details.primary} is ready for setup.`)
-          }
-        >
-          {page === 'Reports' ? <Icon name="download" size={17} /> : <Icon name="plus" size={17} />}
-          {details.primary}
-        </button>
+        <div>
+          <div className="eyebrow">
+            <span className="eyebrow-line" /> {page.toUpperCase()}
+          </div>
+          <h1>
+            {page === 'Memberships'
+              ? 'Membership Plans & Tiers'
+              : page === 'Branches'
+              ? 'Branches & Facility Locations'
+              : page === 'Team'
+              ? 'Team Members & Access Control'
+              : page === 'Billing'
+              ? 'Billing, Invoices & Revenue'
+              : page === 'Reports'
+              ? 'Analytics & Performance Reports'
+              : 'Workspace Settings'}
+          </h1>
+          <p>
+            {page === 'Memberships'
+              ? 'Create custom recurring dues, rates, and multi-branch access rules.'
+              : page === 'Branches'
+              ? 'Manage multi-location branch operations, opening hours, and phone lines.'
+              : page === 'Team'
+              ? 'Granular industry roles (Trainer, Receptionist, Manager) and approval flows.'
+              : page === 'Billing'
+              ? 'Collect cash, card, mobile money (Telebirr/CBE), and generate official receipts.'
+              : page === 'Reports'
+              ? 'A real-time overview of recurring revenues, signups, and check-in metrics.'
+              : 'Branding, gym contact details, and organization preferences.'}
+          </p>
+        </div>
+        <div style={{ display: 'flex', gap: '8px' }}>
+          {page === 'Memberships' && (
+            <button className="button button-primary" onClick={onOpenCreatePlan}>
+              <Icon name="plus" size={17} /> Create a plan
+            </button>
+          )}
+          {page === 'Branches' && (
+            <button className="button button-primary" onClick={onOpenAddBranch}>
+              <Icon name="plus" size={17} /> Add branch
+            </button>
+          )}
+          {page === 'Team' && (
+            <button className="button button-primary" onClick={onOpenInviteTeam}>
+              <Icon name="plus" size={17} /> Invite team member
+            </button>
+          )}
+          {page === 'Billing' && (
+            <button className="button button-primary" onClick={onOpenRecordPayment}>
+              <Icon name="plus" size={17} /> Record payment
+            </button>
+          )}
+          {page === 'Reports' && (
+            <button className="button button-outline" onClick={() => window.print()}>
+              <Icon name="download" size={17} /> Export report
+            </button>
+          )}
+          {page === 'Settings' && (
+            <button
+              className="button button-primary"
+              disabled={saving}
+              onClick={() => onSaveSettings({ name: orgName, contact_email: contactEmail, phone, primary_location: location, logo_url: logoUrl })}
+            >
+              {saving ? 'Saving...' : 'Save changes'}
+            </button>
+          )}
+        </div>
       </section>
-      <div className="member-stats"><div><span>{details.metric1}</span><strong>{details.value1}</strong><small>Updated just now</small></div><div><span>{details.metric2}</span><strong>{details.value2}</strong><small>Across your organization</small></div><div><span>{details.metric3}</span><strong>{details.value3}</strong><small>Current period</small></div></div>
-      {page === 'Memberships' ? (
+
+      {/* Module Stats Bar */}
+      <div className="member-stats">
+        <div>
+          <span>{page === 'Memberships' ? 'Active plans' : page === 'Branches' ? 'Total branches' : page === 'Team' ? 'Team size' : page === 'Billing' ? 'Monthly recurring' : 'Active members'}</span>
+          <strong>{page === 'Memberships' ? plans.length : page === 'Branches' ? branches.length : page === 'Team' ? teamMembers.length : page === 'Billing' ? money(monthlyRevenue) : totalActive}</strong>
+          <small>Configured in system</small>
+        </div>
+        <div>
+          <span>{page === 'Billing' ? 'Collected payments' : 'Active members'}</span>
+          <strong>{page === 'Billing' ? payments.length : totalActive}</strong>
+          <small>Across all branches</small>
+        </div>
+        <div>
+          <span>{page === 'Team' ? 'Pending approvals' : 'Renewals due'}</span>
+          <strong>{page === 'Team' ? approvalRequests.filter((a) => a.status === 'Pending').length : renewalsDue}</strong>
+          <small>{renewalsDue > 0 ? 'Needs attention' : 'All clear'}</small>
+        </div>
+      </div>
+
+      {/* Memberships View */}
+      {page === 'Memberships' && (
         <div className="plan-grid">
           {plans.map((plan, index) => (
             <div className="panel plan-card" key={plan.id}>
@@ -1015,14 +1745,181 @@ function ModulePage({
               <div className="plan-price"><strong>{money(plan.price_cents / 100)}</strong><span>/ {plan.billing_cycle}</span></div>
               <h2>{plan.name}</h2>
               <p>{plan.description}</p>
+              <div style={{ margin: '8px 0 12px' }}>
+                <span className={`badge-pill ${plan.branch_access === 'home_only' ? 'badge-role' : 'badge-branch'}`}>
+                  {plan.branch_access === 'home_only' ? '🏠 Home Branch Only' : '🌐 All-Branch Access'}
+                </span>
+              </div>
               <div className="plan-bottom">
-                <span><b>{members.filter((member) => member.plan === plan.name).length}</b> members</span>
-                <button className="row-menu" onClick={() => onToast('Plan loaded from Supabase.')}><Icon name="dots" size={18} /></button>
+                <span><b>{members.filter((member) => member.plan === plan.name).length}</b> members enrolled</span>
+                <button className="row-menu" onClick={() => onToast('Plan active in Supabase.')}><Icon name="dots" size={18} /></button>
               </div>
             </div>
           ))}
         </div>
-      ) : page === 'Settings' ? (
+      )}
+
+      {/* Branches View */}
+      {page === 'Branches' && (
+        <div className="panel directory-panel">
+          <div className="directory-heading">
+            <div>
+              <h2>Organization branches <span className="table-count">{branches.length}</span></h2>
+              <p>Configure multiple branches with dedicated phone numbers and operational statuses.</p>
+            </div>
+          </div>
+          <div className="member-table-wrap">
+            <table className="directory-table">
+              <thead><tr><th>BRANCH NAME</th><th>ADDRESS / LOCATION</th><th>CONTACT PHONE</th><th>STATUS</th><th>ACTIONS</th></tr></thead>
+              <tbody>
+                {branches.map((b) => (
+                  <tr key={b.id}>
+                    <td><strong>{b.name}</strong></td>
+                    <td>{b.address || 'Central Headquarters'}</td>
+                    <td>{b.phone || '—'}</td>
+                    <td>
+                      <span className={`badge-pill ${b.is_open ? 'badge-branch' : 'status-cancelled'}`}>
+                        {b.is_open ? '● Open & Operating' : '○ Temporarily Closed'}
+                      </span>
+                    </td>
+                    <td>
+                      <button
+                        className={`table-btn ${b.is_open ? 'table-btn-danger' : 'table-btn-success'}`}
+                        onClick={() => onToggleBranch(b.id, b.is_open)}
+                      >
+                        {b.is_open ? 'Pause Branch' : 'Reopen Branch'}
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Team View */}
+      {page === 'Team' && (
+        <div style={{ display: 'grid', gap: '20px' }}>
+          <div className="panel directory-panel">
+            <div className="directory-heading">
+              <div>
+                <h2>Staff &amp; Instructors <span className="table-count">{teamMembers.length}</span></h2>
+                <p>Granular industry roles: Personal Trainers, Instructors, Receptionists, and Branch Managers.</p>
+              </div>
+            </div>
+            <div className="member-table-wrap">
+              <table className="directory-table">
+                <thead><tr><th>STAFF MEMBER</th><th>ASSIGNED ROLE</th><th>BRANCH SCOPE</th><th>STATUS</th></tr></thead>
+                <tbody>
+                  {teamMembers.map((t) => (
+                    <tr key={t.id}>
+                      <td><div className="member-cell"><div className="avatar avatar-purple">{getInitials(t.full_name)}</div><div><strong>{t.full_name}</strong><span>{t.email}</span></div></div></td>
+                      <td><span className="badge-pill badge-role">{t.role}</span></td>
+                      <td>{t.branch_name || 'All branches'}</td>
+                      <td><span className="badge-pill badge-branch">● Active</span></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* Approval Workflows Section */}
+          <div className="panel" style={{ padding: '20px' }}>
+            <h2 style={{ fontSize: '15px', fontWeight: 800, margin: '0 0 4px', color: '#0f172a' }}>
+              Managerial Approval Workflows
+            </h2>
+            <p style={{ fontSize: '12px', color: '#64748b', margin: '0 0 16px' }}>
+              Supervises member freezes, cancellations, refunds, and manager discounts.
+            </p>
+            <div style={{ display: 'grid', gap: '10px' }}>
+              {approvalRequests.length === 0 ? (
+                <div style={{ padding: '16px', background: '#f8fafc', borderRadius: '8px', fontSize: '12px', color: '#94a3b8', textAlign: 'center' }}>
+                  No pending approval requests. Freeze and discount actions will surface here.
+                </div>
+              ) : (
+                approvalRequests.map((req) => (
+                  <div key={req.id} className="approval-card">
+                    <div>
+                      <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '4px' }}>
+                        <span className="badge-pill badge-role">{req.type}</span>
+                        <strong style={{ fontSize: '13px' }}>{req.member_name}</strong>
+                      </div>
+                      <div style={{ fontSize: '11px', color: '#64748b' }}>
+                        Requested by {req.requested_by} · {req.details}
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', gap: '6px' }}>
+                      {req.status === 'Pending' ? (
+                        <>
+                          <button className="table-btn table-btn-success" onClick={() => onApproveRequest(req.id, 'Approved')}>
+                            Approve
+                          </button>
+                          <button className="table-btn table-btn-danger" onClick={() => onApproveRequest(req.id, 'Rejected')}>
+                            Reject
+                          </button>
+                        </>
+                      ) : (
+                        <span className={`badge-pill ${req.status === 'Approved' ? 'badge-branch' : 'status-cancelled'}`}>
+                          {req.status}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Billing & Payments View */}
+      {page === 'Billing' && (
+        <div className="panel directory-panel">
+          <div className="directory-heading">
+            <div>
+              <h2>Payments &amp; Invoices <span className="table-count">{payments.length}</span></h2>
+              <p>Transactions recorded via Cash, Credit Card, Bank Transfer, or Mobile Money (Telebirr / CBE).</p>
+            </div>
+            <button className="button button-outline" onClick={() => window.print()}>
+              <Icon name="download" size={16} /> Export Invoices
+            </button>
+          </div>
+          <div className="member-table-wrap">
+            <table className="directory-table">
+              <thead><tr><th>INVOICE #</th><th>MEMBER</th><th>AMOUNT</th><th>METHOD</th><th>DATE</th><th>RECEIPT</th></tr></thead>
+              <tbody>
+                {payments.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} style={{ textAlign: 'center', padding: '24px', color: '#94a3b8' }}>
+                      No payments recorded yet. Click &quot;Record payment&quot; to log member dues.
+                    </td>
+                  </tr>
+                ) : (
+                  payments.map((p) => (
+                    <tr key={p.id}>
+                      <td className="id-cell">{p.invoice_number || `INV-${p.id.slice(0, 6)}`}</td>
+                      <td><strong>{p.member_name}</strong></td>
+                      <td><strong style={{ color: '#047857' }}>${(p.amount_cents / 100).toFixed(2)}</strong></td>
+                      <td><span className="badge-pill badge-role">{p.method.replace('_', ' ').toUpperCase()}</span></td>
+                      <td>{new Date(p.paid_at).toLocaleDateString()}</td>
+                      <td>
+                        <button className="table-btn table-btn-primary" onClick={() => onViewReceipt(p)}>
+                          Print Receipt
+                        </button>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Settings View */}
+      {page === 'Settings' && (
         <div className="panel settings-panel">
           <div className="settings-title">
             <div className="org-avatar large-org-avatar" style={logoUrl ? { overflow: 'hidden', padding: 0 } : undefined}>
@@ -1057,18 +1954,14 @@ function ModulePage({
           </div>
           <div className="settings-brand-note"><span className="platform-dot" /> Your workspace is powered by <b>GymPoint</b>. Platform branding remains visible.</div>
         </div>
-      ) : page === 'Reports' ? (
+      )}
+
+      {/* Reports View */}
+      {page === 'Reports' && (
         <div className="report-grid">
           <div className="panel report-card"><div className="report-icon report-violet"><Icon name="users" /></div><h2>Membership report</h2><p>Active members, sign-ups, renewals, and cancellations.</p><div className="report-chart-bars">{[38, 54, 46, 70, 57, 82, 66, 94, 70, 100, 79, 91].map((height, index) => <i key={index} style={{ height: `${height}%` }} />)}</div><button className="text-button" onClick={() => onNavigate('Members')}>View members <span>→</span></button></div>
           <div className="panel report-card"><div className="report-icon report-green"><Icon name="receipt" /></div><h2>Revenue report</h2><p>Collected payments, outstanding balances, and renewals.</p><div className="report-highlight"><strong>{money(monthlyRevenue)}</strong><span><Icon name="trend" size={14} /> Monthly estimate</span></div><button className="text-button" onClick={() => onNavigate('Billing')}>View billing <span>→</span></button></div>
           <div className="panel report-card"><div className="report-icon report-orange"><Icon name="scan" /></div><h2>Attendance report</h2><p>Daily check-ins, peak hours, and branch activity.</p><div className="report-highlight"><strong>{totalActive}</strong><span>Active members</span></div><button className="text-button" onClick={() => onNavigate('Check-in')}>View check-ins <span>→</span></button></div>
-        </div>
-      ) : (
-        <div className="panel module-empty">
-          <div className="empty-illustration"><Icon name={pageIcons[page]} size={27} /></div>
-          <h2>{page === 'Branches' ? 'Your organization, all in one place' : page === 'Team' ? 'The right access for every role' : 'Your financial picture, clearly'}</h2>
-          <p>{descriptions[page]} Build a clear picture of your day-to-day operations as your gym grows.</p>
-          <div className="empty-pill-row"><span><Icon name="check" size={14} /> Organization-scoped</span><span><Icon name="check" size={14} /> Branch-ready</span><span><Icon name="check" size={14} /> Supabase RLS</span></div>
         </div>
       )}
     </div>

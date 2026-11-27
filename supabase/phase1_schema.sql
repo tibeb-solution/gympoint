@@ -159,7 +159,36 @@ alter table public.members add column if not exists plan_name text not null defa
 alter table public.members add column if not exists avatar_color text not null default 'violet';
 alter table public.members add column if not exists joined_at timestamptz not null default now();
 alter table public.members add column if not exists expires_at timestamptz;
+alter table public.members add column if not exists emergency_contact text;
+alter table public.members add column if not exists health_notes text;
+alter table public.members add column if not exists waiver_accepted_at timestamptz;
+alter table public.members add column if not exists freeze_reason text;
+alter table public.members add column if not exists cancellation_reason text;
+alter table public.members add column if not exists discount_code text;
 alter table public.members alter column member_code set default ('GP-' || lpad(nextval('public.member_code_seq')::text, 5, '0'));
+
+alter table public.membership_plans add column if not exists branch_access text not null default 'all';
+
+-- Approval requests for freezes, cancellations, refunds, and discounts
+create table if not exists public.approval_requests (
+  id uuid primary key default gen_random_uuid(),
+  organization_id uuid not null references public.organizations(id) on delete cascade,
+  request_type text not null check (request_type in ('Freeze Membership', 'Cancel Membership', 'Refund', 'Discount')),
+  member_name text not null,
+  requested_by text not null,
+  details text not null,
+  status text not null default 'Pending' check (status in ('Pending', 'Approved', 'Rejected')),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+alter table public.approval_requests enable row level security;
+drop policy if exists "approval_requests access" on public.approval_requests;
+drop policy if exists "approval_requests manage" on public.approval_requests;
+create policy "approval_requests access" on public.approval_requests for select to authenticated
+  using ((select private.can_access_organization(organization_id)));
+create policy "approval_requests manage" on public.approval_requests for all to authenticated
+  using ((select private.can_manage_organization(organization_id))) with check ((select private.can_manage_organization(organization_id)));
+
 
 update public.organizations
 set org_code = 'GYM-' || lpad(nextval('public.organization_code_seq')::text, 5, '0')
